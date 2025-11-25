@@ -70,11 +70,11 @@ class Inventory(commands.Cog):
             
             embed.set_footer(text="Use /boxpanel to purchase boxes")
             
-            # Public when viewing others
-            await interaction.response.send_message(embed=embed, ephemeral=(target == interaction.user))
+            # PUBLIC - SEND TO CHANNEL
+            await interaction.response.send_message(embed=embed)
             
         except Exception as e:
-            await interaction.response.send_message(f"Error: {str(e)}", ephemeral=True)
+            await interaction.response.send_message(f"Error: {str(e)}")
 
 async def setup(bot):
     await bot.add_cog(Inventory(bot))
