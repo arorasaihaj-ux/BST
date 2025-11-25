@@ -12,103 +12,114 @@ GUILD_ID = int(os.getenv('GUILD_ID', 0))
 DATABASE_URL = os.getenv('DATABASE_URL')
 
 # Channel IDs
-COMMAND_CHANNEL_ID = int(os.getenv('COMMAND_CHANNEL_ID', 0)) if os.getenv('COMMAND_CHANNEL_ID') else None
-TICKET_CATEGORY_ID = int(os.getenv('TICKET_CATEGORY_ID', 0)) if os.getenv('TICKET_CATEGORY_ID') else None
-TICKET_SETUP_CHANNEL_ID = int(os.getenv('TICKET_SETUP_CHANNEL_ID', 0)) if os.getenv('TICKET_SETUP_CHANNEL_ID') else None
+COMMAND_CHANNEL_ID = int(os.getenv('COMMAND_CHANNEL_ID', 0))
+COUNTING_CHANNELS = [int(x.strip()) for x in os.getenv('COUNTING_CHANNELS', '').split(',') if x.strip()]
+TICKET_CATEGORY_ID = int(os.getenv('TICKET_CATEGORY_ID', 0))
+TICKET_SETUP_CHANNEL_ID = int(os.getenv('TICKET_SETUP_CHANNEL_ID', 0))
+GIVEAWAY_CHANNEL_ID = int(os.getenv('GIVEAWAY_CHANNEL_ID', 0))
+SHOP_CHANNEL_ID = int(os.getenv('SHOP_CHANNEL_ID', 0))
 
-# Counting Channels (messages earn BST)
-COUNTING_CHANNELS = [
-    int(ch) for ch in os.getenv('COUNTING_CHANNELS', '').split(',') if ch.strip()
-]
-
-# Manager Role IDs
-MANAGER_ROLES = [
-    int(role) for role in os.getenv('MANAGER_ROLES', '').split(',') if role.strip()
-]
+# Role IDs
+MANAGER_ROLES = [int(x.strip()) for x in os.getenv('MANAGER_ROLES', '').split(',') if x.strip()]
 
 # Economy Settings
 MESSAGES_FOR_BST = int(os.getenv('MESSAGES_FOR_BST', 100))
 BST_PER_100_MESSAGES = float(os.getenv('BST_PER_100_MESSAGES', 0.23))
 WEEKLY_MESSAGE_CAP = float(os.getenv('WEEKLY_MESSAGE_CAP', 10.0))
+DAILY_REWARD = float(os.getenv('DAILY_REWARD', 0.5))
 
-# Bot Prefix
-PREFIX = os.getenv('PREFIX', '"')
+# Permission Levels
+class Permissions:
+    OWNER_ONLY_COMMANDS = [
+        'mint', 'releaseboxes', 'setboxprice', 'setmessagevalue',
+        'setweeklycap', 'economystats', 'resetuser'
+    ]
+    
+    MANAGER_COMMANDS = [
+        'addpoints', 'removepoints', 'resetbst', 'listitem',
+        'removeshopitem', 'restockshop', 'createevent'
+    ]
 
-# Design System - Unicode Characters
+# Design System
+class Colors:
+    PRIMARY = 0x1a1a1a
+    SECONDARY = 0x2d2d2d
+    SUCCESS = 0x00c853
+    WARNING = 0xff6d00
+    ERROR = 0xd50000
+    INFO = 0x2979ff
+
 class Design:
-    # Box Drawing
-    TOP_LEFT = '┏'
-    TOP_RIGHT = '┓'
-    BOTTOM_LEFT = '┗'
-    BOTTOM_RIGHT = '┛'
-    HORIZONTAL = '━'
-    VERTICAL = '┃'
-    
-    # Bullets
-    ARROW = '▸'
-    DOT = '•'
-    
-    # Typography Functions
     @staticmethod
-    def bold(text):
-        """Convert text to bold unicode"""
-        bold_map = {
-            'A': '𝗔', 'B': '𝗕', 'C': '𝗖', 'D': '𝗗', 'E': '𝗘', 'F': '𝗙', 'G': '𝗚', 'H': '𝗛',
-            'I': '𝗜', 'J': '𝗝', 'K': '𝗞', 'L': '𝗟', 'M': '𝗠', 'N': '𝗡', 'O': '𝗢', 'P': '𝗣',
-            'Q': '𝗤', 'R': '𝗥', 'S': '𝗦', 'T': '𝗧', 'U': '𝗨', 'V': '𝗩', 'W': '𝗪', 'X': '𝗫',
-            'Y': '𝗬', 'Z': '𝗭', '0': '𝟬', '1': '𝟭', '2': '𝟮', '3': '𝟯', '4': '𝟰',
-            '5': '𝟱', '6': '𝟲', '7': '𝟳', '8': '𝟴', '9': '𝟵', '.': '.'
-        }
-        return ''.join(bold_map.get(c.upper(), c) for c in text)
+    def header(text, width=40):
+        return f"**{text.upper()}**\n{'─' * width}"
+    
+    @staticmethod
+    def section(text):
+        return f"**{text}**"
+    
+    @staticmethod
+    def field(key, value, width=15):
+        spaces = ' ' * (width - len(key))
+        return f"**{key}:**{spaces} `{value}`"
+    
+    @staticmethod
+    def item(name, quantity):
+        return f"• {name} {quantity}"
     
     @staticmethod
     def small_caps(text):
-        """Convert text to small caps"""
-        small_map = {
-            'a': 'ᴀ', 'b': 'ʙ', 'c': 'ᴄ', 'd': 'ᴅ', 'e': 'ᴇ', 'f': 'ғ', 'g': 'ɢ', 'h': 'ʜ',
-            'i': 'ɪ', 'j': 'ᴊ', 'k': 'ᴋ', 'l': 'ʟ', 'm': 'ᴍ', 'n': 'ɴ', 'o': 'ᴏ', 'p': 'ᴘ',
-            'q': 'ǫ', 'r': 'ʀ', 's': 's', 't': 'ᴛ', 'u': 'ᴜ', 'v': 'ᴠ', 'w': 'ᴡ', 'x': 'x',
-            'y': 'ʏ', 'z': 'ᴢ'
-        }
-        return ''.join(small_map.get(c.lower(), c) for c in text)
+        return f"**{text.upper()}**"
     
     @staticmethod
-    def header(text, width=30):
-        """Create a boxed header"""
-        top = f"{Design.TOP_LEFT}{Design.HORIZONTAL * width}{Design.TOP_RIGHT}"
-        middle = f"{Design.VERTICAL} {Design.bold(text):<{width}} {Design.VERTICAL}"
-        bottom = f"{Design.BOTTOM_LEFT}{Design.HORIZONTAL * width}{Design.BOTTOM_RIGHT}"
-        return f"{top}\n{middle}\n{bottom}"
+    def panel_border():
+        return "╔══════════════════════════════════════╗"
     
     @staticmethod
-    def section(title):
-        """Create a section header"""
-        return f"\n{Design.bold(title)}"
+    def panel_divider():
+        return "╠══════════════════════════════════════╣"
     
     @staticmethod
-    def field(label, value, width=20):
-        """Create a label-value field"""
-        label_formatted = Design.small_caps(label)
-        value_formatted = Design.bold(str(value))
-        return f"{label_formatted:<{width}} {value_formatted}"
+    def panel_footer():
+        return "╚══════════════════════════════════════╝"
     
     @staticmethod
-    def item(name, value=None):
-        """Create a list item"""
-        if value:
-            return f"{Design.ARROW} {name}  {Design.DOT}  {value}"
-        return f"{Design.ARROW} {name}"
+    def warning(text):
+        return f"⚠️ **{text}**"
     
     @staticmethod
-    def divider(width=28):
-        """Create a divider line"""
-        return Design.HORIZONTAL * width
+    def success(text):
+        return f"✅ **{text}**"
+    
+    @staticmethod
+    def error(text):
+        return f"❌ **{text}**"
 
-# Color Scheme
-class Colors:
-    PRIMARY = 0x2F3136    # Dark gray
-    SUCCESS = 0x43B581    # Green
-    ERROR = 0xF04747      # Red
-    WARNING = 0xFAA61A    # Orange
-    INFO = 0x5865F2       # Blurple
-    YELLOW = 0xFEE75C     # Yellow
+# Box Configuration
+BOX_TYPES = {
+    "base": {
+        "name": "Base Mystery Box",
+        "cost": 1.0,
+        "initial_supply": 30,
+        "drops": [
+            {"item": "Taco Block", "chance": 40.0},
+            {"item": "Los Lucky Block", "chance": 40.0},
+            {"item": "40 Robux", "chance": 15.0},
+            {"item": "Ques Croc", "chance": 2.5},
+            {"item": "Base 67", "chance": 2.5}
+        ]
+    },
+    "gold": {
+        "name": "Gold Mystery Box", 
+        "cost": 2.5,
+        "initial_supply": 15,
+        "drops": [
+            {"item": "Los Lucky Block", "chance": 50.0},
+            {"item": "Miet Bike", "chance": 30.0},
+            {"item": "80 Robux", "chance": 15.0},
+            {"item": "La Combination", "chance": 3.0},
+            {"item": "La Grande Combi", "chance": 1.0},
+            {"item": "400 Robux", "chance": 1.0}
+        ]
+    }
+}
