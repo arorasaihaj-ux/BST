@@ -101,6 +101,45 @@ class Database:
             """, week_start.date())
             return True
 
+    # ==================== MANAGER DISTRIBUTION FROM POOL ====================
+
+    async def distribute_from_pool(self, user_id: int, amount: float) -> bool:
+        """Manager distributes BST from pool to user (with pool check)"""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                # Check pool has enough
+                pool_amount = await conn.fetchval(
+                    "SELECT pool_amount FROM economy_pool WHERE pool_id = 1"
+                )
+                
+                if pool_amount < amount:
+                    return False
+                
+                # Remove from pool
+                await conn.execute("""
+                    UPDATE economy_pool 
+                    SET pool_amount = pool_amount - $1 
+                    WHERE pool_id = 1
+                """, amount)
+                
+                # Add to user
+                await conn.execute("""
+                    INSERT INTO users (user_id, bst_balance, message_count)
+                    VALUES ($1, $2, 0)
+                    ON CONFLICT (user_id) DO UPDATE SET
+                        bst_balance = users.bst_balance + $2
+                """, user_id, amount)
+                
+                return True
+
+    async def get_pool_balance(self) -> float:
+        """Get current pool balance"""
+        async with self.pool.acquire() as conn:
+            result = await conn.fetchval(
+                "SELECT pool_amount FROM economy_pool WHERE pool_id = 1"
+            )
+            return float(result) if result else 0.0
+
     # ==================== USERS ====================
     
     async def get_user(self, user_id: int) -> Dict[str, Any]:
