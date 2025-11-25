@@ -1,6 +1,7 @@
 import asyncpg
 import os
 from typing import Optional, Dict, Any, List
+from datetime import datetime, timedelta
 
 class Database:
     def __init__(self):
@@ -13,15 +14,92 @@ class Database:
             self.db_url,
             min_size=1,
             max_size=5,
-            statement_cache_size=0  # For pgbouncer compatibility
+            statement_cache_size=0
         )
         print("✅ Database connected")
+        
+        # Initialize weekly cap if not exists
+        await self.initialize_weekly_cap()
 
     async def close(self):
         """Close database connection"""
         if self.pool:
             await self.pool.close()
             print("✅ Database disconnected")
+
+    async def initialize_weekly_cap(self):
+        """Initialize weekly cap system"""
+        async with self.pool.acquire() as conn:
+            # Create weekly_cap table if not exists
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS weekly_cap (
+                    week_id SERIAL PRIMARY KEY,
+                    week_start DATE DEFAULT CURRENT_DATE,
+                    bst_distributed DECIMAL(10,2) DEFAULT 0.00,
+                    total_cap DECIMAL(10,2) DEFAULT 10.00,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            
+            # Insert current week if not exists
+            await conn.execute("""
+                INSERT INTO weekly_cap (week_start, bst_distributed, total_cap)
+                SELECT CURRENT_DATE, 0.00, 10.00
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM weekly_cap 
+                    WHERE week_start = DATE_TRUNC('week', CURRENT_DATE)::DATE
+                )
+            """)
+
+    # ==================== WEEKLY CAP SYSTEM ====================
+    
+    async def get_weekly_cap(self) -> Dict[str, Any]:
+        """Get current week's cap information"""
+        async with self.pool.acquire() as conn:
+            # Get or create current week
+            week_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            week_start = week_start - timedelta(days=week_start.weekday())  # Monday
+            
+            row = await conn.fetchrow("""
+                INSERT INTO weekly_cap (week_start, bst_distributed, total_cap)
+                VALUES ($1, 0.00, 10.00)
+                ON CONFLICT (week_start) DO UPDATE SET week_start = weekly_cap.week_start
+                RETURNING *
+            """, week_start.date())
+            
+            return dict(row) if row else None
+
+    async def increment_weekly_distributed(self, amount: float = 1.0) -> bool:
+        """Increment weekly distributed BST"""
+        async with self.pool.acquire() as conn:
+            week_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            week_start = week_start - timedelta(days=week_start.weekday())
+            
+            result = await conn.execute("""
+                UPDATE weekly_cap 
+                SET bst_distributed = bst_distributed + $1
+                WHERE week_start = $2 AND bst_distributed + $1 <= total_cap
+            """, amount, week_start.date())
+            
+            return "UPDATE 1" in result
+
+    async def get_weekly_remaining(self) -> float:
+        """Get remaining BST available this week"""
+        weekly_cap = await self.get_weekly_cap()
+        return max(0, weekly_cap['total_cap'] - weekly_cap['bst_distributed'])
+
+    async def reset_weekly_cap(self) -> bool:
+        """Reset weekly cap (for testing or manual reset)"""
+        async with self.pool.acquire() as conn:
+            week_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            week_start = week_start - timedelta(days=week_start.weekday())
+            
+            await conn.execute("""
+                UPDATE weekly_cap 
+                SET bst_distributed = 0.00
+                WHERE week_start = $1
+            """, week_start.date())
+            return True
 
     # ==================== USERS ====================
     
@@ -118,6 +196,49 @@ class Database:
             )
             return result if result else 0
 
+    # ==================== ECONOMY POOL ====================
+    
+    async def get_economy_pool(self) -> float:
+        """Get total BST in economy pool"""
+        async with self.pool.acquire() as conn:
+            result = await conn.fetchval(
+                "SELECT pool_amount FROM economy_pool WHERE pool_id = 1"
+            )
+            return float(result) if result else 0.0
+
+    async def add_to_pool(self, amount: float) -> float:
+        """Add BST to economy pool"""
+        async with self.pool.acquire() as conn:
+            result = await conn.fetchrow("""
+                INSERT INTO economy_pool (pool_id, pool_amount)
+                VALUES (1, $1)
+                ON CONFLICT (pool_id) DO UPDATE SET
+                    pool_amount = economy_pool.pool_amount + $1
+                RETURNING pool_amount
+            """, amount)
+            return float(result['pool_amount'])
+
+    async def remove_from_pool(self, amount: float) -> Optional[float]:
+        """Remove BST from pool (with check)"""
+        async with self.pool.acquire() as conn:
+            result = await conn.fetchrow("""
+                UPDATE economy_pool
+                SET pool_amount = pool_amount - $1
+                WHERE pool_id = 1 AND pool_amount >= $1
+                RETURNING pool_amount
+            """, amount)
+            return float(result['pool_amount']) if result else None
+
+    async def reset_economy_pool(self) -> bool:
+        """Reset economy pool to 0"""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO economy_pool (pool_id, pool_amount)
+                VALUES (1, 0.0)
+                ON CONFLICT (pool_id) DO UPDATE SET pool_amount = 0.0
+            """)
+            return True
+
     # ==================== BOXES ====================
     
     async def add_box(self, user_id: int, box_type: str) -> str:
@@ -206,54 +327,14 @@ class Database:
                 'items': [dict(i) for i in items]
             }
 
-    # ==================== ECONOMY POOL ====================
-    
-    async def get_economy_pool(self) -> float:
-        """Get total BST in economy pool"""
-        async with self.pool.acquire() as conn:
-            result = await conn.fetchval(
-                "SELECT pool_amount FROM economy_pool WHERE pool_id = 1"
-            )
-            return float(result) if result else 0.0
-
-    async def add_to_pool(self, amount: float) -> float:
-        """Add BST to economy pool"""
-        async with self.pool.acquire() as conn:
-            result = await conn.fetchrow("""
-                INSERT INTO economy_pool (pool_id, pool_amount)
-                VALUES (1, $1)
-                ON CONFLICT (pool_id) DO UPDATE SET
-                    pool_amount = economy_pool.pool_amount + $1
-                RETURNING pool_amount
-            """, amount)
-            return float(result['pool_amount'])
-
-    async def remove_from_pool(self, amount: float) -> Optional[float]:
-        """Remove BST from pool (with check)"""
-        async with self.pool.acquire() as conn:
-            result = await conn.fetchrow("""
-                UPDATE economy_pool
-                SET pool_amount = pool_amount - $1
-                WHERE pool_id = 1 AND pool_amount >= $1
-                RETURNING pool_amount
-            """, amount)
-            return float(result['pool_amount']) if result else None
-
-    async def reset_economy_pool(self) -> bool:
-        """Reset economy pool to 0"""
-        async with self.pool.acquire() as conn:
-            await conn.execute("""
-                INSERT INTO economy_pool (pool_id, pool_amount)
-                VALUES (1, 0.0)
-                ON CONFLICT (pool_id) DO UPDATE SET pool_amount = 0.0
-            """)
-            return True
-
     # ==================== TRADING ====================
     
     async def create_trade(self, creator_id: int, channel_id: int) -> str:
         """Create new trade ticket"""
         async with self.pool.acquire() as conn:
+            # Ensure user exists first
+            await self.get_user(creator_id)
+            
             trade_id = await conn.fetchval("""
                 INSERT INTO trades (creator_id, channel_id, status, escrow_amount)
                 VALUES ($1, $2, 'pending', 0.0)
@@ -321,4 +402,3 @@ class Database:
             return await conn.fetchval(
                 "SELECT COUNT(*) FROM boxes WHERE opened = true"
             )
-
