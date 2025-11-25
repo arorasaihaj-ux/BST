@@ -1,168 +1,87 @@
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 import os
 import asyncio
 from dotenv import load_dotenv
 from aiohttp import web
-from database import db
+from database import Database
 
 load_dotenv()
 
-class BSTEconomyBot(commands.Bot):
+class CleanEconomyBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True
         intents.members = True
         
         super().__init__(
-            command_prefix='"',
+            command_prefix='!',
             intents=intents,
             help_command=None
         )
         
+        self.db = None
         self.initialized = False
+        
+        # Role IDs from .env
+        self.owner_role_id = int(os.getenv('OWNER_ROLE_ID'))  # Full control
+        self.manager_role_id = int(os.getenv('MANAGER_ROLE_ID'))  # User BST management
+        self.guild_id = int(os.getenv('GUILD_ID'))
 
     async def setup_hook(self):
-        """Initialize bot - runs BEFORE on_ready"""
-        # STEP 1: Connect to database FIRST!
-        try:
-            await db.connect()
-            print("✓ Database connected successfully")
-        except Exception as e:
-            print(f"✗ CRITICAL: Database connection failed: {e}")
-            print("Bot cannot function without database!")
-            return
-        
-        # STEP 2: Load all cogs
+        """Load cogs"""
         cogs = [
-            'cogs.economy',          # Economy & messages
-            'cogs.boxes',            # Mystery boxes
-            'cogs.shop',             # Shop system
-            'cogs.secure_trading',   # Trading system
-            'cogs.gifts',            # Gift system
-            'cogs.bounties',         # Bounty board
-            'cogs.auctions',         # Auction house
-            'cogs.rentals',          # Rental system
-            'cogs.achievements',     # Achievements
-            'cogs.collections',      # Collections
-            'cogs.events',           # Events
-            'cogs.loyalty',          # Loyalty program
-            'cogs.giveaways',        # Giveaways
-            'cogs.admin'             # Admin commands
+            'cogs.economy',    # Message tracking + BST earning
+            'cogs.boxes',      # Box buying/opening system
+            'cogs.inventory',  # View inventory
+            'cogs.trading',    # Secure BST trading
+            'cogs.admin'       # Owner/Manager commands
         ]
-        
-        loaded = 0
-        failed = 0
         
         for cog in cogs:
             try:
                 await self.load_extension(cog)
-                print(f"✓ Loaded {cog}")
-                loaded += 1
+                print(f"✅ Loaded {cog}")
             except Exception as e:
-                print(f"✗ Failed to load {cog}: {e}")
-                failed += 1
-        
-        print(f"\n📊 Cog Loading Summary: {loaded} loaded, {failed} failed")
-        
-        # STEP 3: Start background tasks
-        if not self.background_tasks.is_running():
-            self.background_tasks.start()
-            print("✓ Background tasks started")
+                print(f"❌ Failed to load {cog}: {e}")
 
     async def on_ready(self):
-        """Called when bot is ready"""
-        print(f'\n{"="*50}')
-        print(f'✓ Bot: {self.user} (ID: {self.user.id})')
-        print(f'✓ Guilds: {len(self.guilds)}')
-        print(f'✓ Users: {len(self.users)}')
-        print(f'{"="*50}\n')
+        print(f'✅ {self.user} is online!')
+        print(f'📊 Guild ID: {self.guild_id}')
+        print(f'👑 Owner Role: {self.owner_role_id}')
+        print(f'🔧 Manager Role: {self.manager_role_id}')
         
-        # Sync slash commands (only once)
         if not self.initialized:
-            try:
-                synced = await self.tree.sync()
-                print(f"✓ Synced {len(synced)} slash commands")
-                self.initialized = True
-            except Exception as e:
-                print(f"✗ Failed to sync commands: {e}")
-
-    async def close(self):
-        """Cleanup on shutdown"""
-        print("\n🛑 Shutting down bot...")
-        
-        # Stop background tasks
-        if self.background_tasks.is_running():
-            self.background_tasks.cancel()
-        
-        # Close database connection
-        await db.close()
-        
-        # Close bot
-        await super().close()
-        print("✓ Bot shutdown complete")
-
-    @tasks.loop(minutes=5)
-    async def background_tasks(self):
-        """Background maintenance tasks"""
-        try:
-            # You can add periodic tasks here
-            # Example: Clean up old trades, reset daily rewards, etc.
-            pass
-        except Exception as e:
-            print(f"Background task error: {e}")
-
-    @background_tasks.before_loop
-    async def before_background_tasks(self):
-        """Wait for bot to be ready before starting tasks"""
-        await self.wait_until_ready()
+            # Connect database
+            self.db = Database()
+            await self.db.connect()
+            
+            # Sync commands
+            await self.tree.sync(guild=discord.Object(id=self.guild_id))
+            self.initialized = True
+            print("✅ Commands synced")
 
     async def start_web_server(self):
-        """Web server for Render/Railway health checks"""
-        async def health_check(request):
-            return web.Response(
-                text=f"Bot Status: {'Online' if self.is_ready() else 'Starting...'}\n"
-                     f"Guilds: {len(self.guilds)}\n"
-                     f"Users: {len(self.users)}"
-            )
+        """Health check for Render"""
+        async def health(request):
+            return web.Response(text="Bot running")
         
         app = web.Application()
-        app.router.add_get('/', health_check)
-        app.router.add_get('/health', health_check)
-        
+        app.router.add_get('/', health)
         runner = web.AppRunner(app)
         await runner.setup()
-        
         site = web.TCPSite(runner, '0.0.0.0', int(os.getenv('PORT', 8080)))
         await site.start()
-        print(f"✓ Web server started on port {os.getenv('PORT', 8080)}")
+        print("✅ Web server started")
 
 async def main():
-    """Main entry point"""
-    bot = BSTEconomyBot()
+    bot = CleanEconomyBot()
     
-    try:
-        # Start web server for hosting platforms
-        await bot.start_web_server()
-        
-        # Start the bot
-        token = os.getenv('DISCORD_TOKEN')
-        if not token:
-            print("✗ ERROR: DISCORD_TOKEN not found in .env file!")
-            return
-        
-        await bot.start(token)
-        
-    except KeyboardInterrupt:
-        print("\n⚠️  Bot stopped by user")
-    except Exception as e:
-        print(f"✗ FATAL ERROR: {e}")
-    finally:
-        if not bot.is_closed():
-            await bot.close()
+    # Start health check server
+    await bot.start_web_server()
+    
+    # Start bot
+    await bot.start(os.getenv('DISCORD_TOKEN'))
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\n👋 Goodbye!")
+    asyncio.run(main())
