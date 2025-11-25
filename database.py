@@ -7,448 +7,452 @@ import random
 class Database:
     def __init__(self):
         self.pool: Optional[asyncpg.Pool] = None
-    
+
     async def connect(self):
-        """Initialize database connection pool"""
+        """Initialize database connection pool with pgbouncer fix"""
         self.pool = await asyncpg.create_pool(
             config.DATABASE_URL,
-            min_size=2,
-            max_size=10,
-            command_timeout=60
+            min_size=1,
+            max_size=5,
+            statement_cache_size=0  # Fix for pgbouncer
         )
         print("✓ Database connected")
-    
+
     async def close(self):
-        """Close database connection pool"""
+        """Close database connection"""
         if self.pool:
             await self.pool.close()
             print("✓ Database disconnected")
-    
-    # ==================== USER OPERATIONS ====================
-    
-    async def get_user(self, user_id: int) -> Optional[Dict]:
-        """Get user data or create if doesn't exist"""
+
+    # User Operations
+    async def get_user(self, user_id: int) -> Dict[str, Any]:
+        """Get or create user"""
         async with self.pool.acquire() as conn:
-            user = await conn.fetchrow(
-                "SELECT * FROM users WHERE user_id = $1",
-                user_id
-            )
-            if not user:
-                await conn.execute(
-                    """INSERT INTO users (user_id, bst_balance, total_messages, weekly_bst_earned)
-                       VALUES ($1, 0, 0, 0)""",
-                    user_id
-                )
-                user = await conn.fetchrow(
-                    "SELECT * FROM users WHERE user_id = $1",
-                    user_id
-                )
+            user = await conn.fetchrow("""
+                INSERT INTO users (user_id, discord_tag, bst_balance, total_messages, weekly_messages, last_active)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    discord_tag = EXCLUDED.discord_tag,
+                    last_active = EXCLUDED.last_active
+                RETURNING *
+            """, user_id, f"user_{user_id}", 0.0, 0, 0, datetime.utcnow())
+            
             return dict(user) if user else None
-    
-    async def update_balance(self, user_id: int, amount: float, operation: str = 'add'):
+
+    async def update_user_balance(self, user_id: int, amount: float) -> bool:
         """Update user BST balance"""
         async with self.pool.acquire() as conn:
-            if operation == 'add':
-                await conn.execute(
-                    "UPDATE users SET bst_balance = bst_balance + $1, updated_at = NOW() WHERE user_id = $2",
-                    amount, user_id
-                )
-            elif operation == 'subtract':
-                await conn.execute(
-                    "UPDATE users SET bst_balance = bst_balance - $1, updated_at = NOW() WHERE user_id = $2",
-                    amount, user_id
-                )
-            elif operation == 'set':
-                await conn.execute(
-                    "UPDATE users SET bst_balance = $1, updated_at = NOW() WHERE user_id = $2",
-                    amount, user_id
-                )
-    
-    async def get_balance(self, user_id: int) -> float:
-        """Get user's BST balance"""
-        user = await self.get_user(user_id)
-        return float(user['bst_balance']) if user else 0.0
-    
-    async def increment_messages(self, user_id: int) -> float:
-        """Increment message count and award BST if applicable"""
-        async with self.pool.acquire() as conn:
-            # Get or create user
-            user = await self.get_user(user_id)
-            
-            # Check weekly cap
-            if float(user['weekly_bst_earned']) >= config.WEEKLY_MESSAGE_CAP:
-                return 0.0
-            
-            # Increment message count
-            new_count = user['total_messages'] + 1
-            await conn.execute(
-                "UPDATE users SET total_messages = $1, updated_at = NOW() WHERE user_id = $2",
-                new_count, user_id
-            )
-            
-            # Check if eligible for BST
-            if new_count % config.MESSAGES_FOR_BST == 0:
-                bst_to_award = config.BST_PER_100_MESSAGES
+            async with conn.transaction():
+                result = await conn.execute("""
+                    UPDATE users 
+                    SET bst_balance = bst_balance + $1,
+                        last_active = $2
+                    WHERE user_id = $3 AND bst_balance + $1 >= 0
+                """, amount, datetime.utcnow(), user_id)
                 
-                # Check if it would exceed weekly cap
-                potential_total = float(user['weekly_bst_earned']) + bst_to_award
-                if potential_total > config.WEEKLY_MESSAGE_CAP:
-                    bst_to_award = config.WEEKLY_MESSAGE_CAP - float(user['weekly_bst_earned'])
+                return "UPDATE 1" in result
+
+    async def record_message(self, user_id: int, discord_tag: str, channel_id: int) -> bool:
+        """Record user message and award BST if eligible"""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                # Get current week start
+                week_start = datetime.utcnow() - timedelta(days=datetime.utcnow().weekday())
                 
-                if bst_to_award > 0:
-                    await conn.execute(
-                        """UPDATE users 
-                           SET bst_balance = bst_balance + $1, 
-                               weekly_bst_earned = weekly_bst_earned + $1,
-                               updated_at = NOW()
-                           WHERE user_id = $2""",
-                        bst_to_award, user_id
-                    )
-                    return bst_to_award
-            
-            return 0.0
-    
-    async def reset_weekly_caps(self):
-        """Reset weekly BST caps for all users"""
-        async with self.pool.acquire() as conn:
-            await conn.execute(
-                """UPDATE users 
-                   SET weekly_bst_earned = 0, 
-                       weekly_reset_date = NOW()
-                   WHERE weekly_reset_date < NOW() - INTERVAL '7 days'"""
-            )
-    
-    # ==================== BOX OPERATIONS ====================
-    
-    async def get_box_types(self) -> List[Dict]:
-        """Get all box types"""
-        async with self.pool.acquire() as conn:
-            rows = await conn.fetch("SELECT * FROM box_types ORDER BY cost_bst")
-            return [dict(row) for row in rows]
-    
-    async def purchase_box(self, user_id: int, box_type_id: str) -> Dict:
+                # Update message counts
+                await conn.execute("""
+                    INSERT INTO users (user_id, discord_tag, total_messages, weekly_messages, last_active)
+                    VALUES ($1, $2, 1, 1, $3)
+                    ON CONFLICT (user_id) DO UPDATE SET
+                        discord_tag = EXCLUDED.discord_tag,
+                        total_messages = users.total_messages + 1,
+                        weekly_messages = CASE 
+                            WHEN users.weekly_reset < $4 THEN 1
+                            ELSE users.weekly_messages + 1
+                        END,
+                        weekly_reset = CASE
+                            WHEN users.weekly_reset < $4 THEN $4
+                            ELSE users.weekly_reset
+                        END,
+                        last_active = EXCLUDED.last_active
+                """, user_id, discord_tag, datetime.utcnow(), week_start)
+                
+                # Check if eligible for BST
+                user = await conn.fetchrow("""
+                    SELECT weekly_messages, bst_balance FROM users 
+                    WHERE user_id = $1
+                """, user_id)
+                
+                if user and user['weekly_messages'] % config.MESSAGES_FOR_BST == 0:
+                    # Check weekly cap
+                    weekly_bst = await conn.fetchval("""
+                        SELECT COALESCE(SUM(amount_bst), 0) FROM transactions 
+                        WHERE user_id = $1 AND tx_type = 'message_reward' 
+                        AND created_at >= $2
+                    """, user_id, week_start)
+                    
+                    if weekly_bst < config.WEEKLY_MESSAGE_CAP:
+                        bst_earned = config.BST_PER_100_MESSAGES
+                        await conn.execute("""
+                            UPDATE users SET bst_balance = bst_balance + $1
+                            WHERE user_id = $2
+                        """, bst_earned, user_id)
+                        
+                        await conn.execute("""
+                            INSERT INTO transactions (user_id, tx_type, amount_bst, metadata)
+                            VALUES ($1, 'message_reward', $2, $3)
+                        """, user_id, bst_earned, {"channel_id": channel_id, "messages": config.MESSAGES_FOR_BST})
+                        
+                        return True
+                
+                return False
+
+    # Box Operations
+    async def purchase_box(self, user_id: int, box_type: str) -> Dict[str, Any]:
         """Purchase a mystery box"""
         async with self.pool.acquire() as conn:
             async with conn.transaction():
-                # Get box type
-                box_type = await conn.fetchrow(
-                    "SELECT * FROM box_types WHERE box_type_id = $1 FOR UPDATE",
-                    box_type_id
-                )
+                # Get box info and check supply
+                box_info = config.BOX_TYPES[box_type]
+                box_data = await conn.fetchrow("""
+                    SELECT released, initial_release FROM box_types 
+                    WHERE box_type_id = $1
+                """, box_type)
                 
-                if not box_type:
-                    return {'success': False, 'error': 'Box type not found'}
+                if not box_data or box_data['released'] >= box_data['initial_release']:
+                    raise Exception("Box sold out")
                 
-                # Check supply
-                if box_type['released'] >= box_type['initial_release']:
-                    return {'success': False, 'error': 'Out of stock'}
+                # Check user balance
+                user = await conn.fetchrow("""
+                    SELECT bst_balance FROM users WHERE user_id = $1
+                """, user_id)
                 
-                # Check balance
-                balance = await self.get_balance(user_id)
-                cost = float(box_type['cost_bst'])
+                if not user or user['bst_balance'] < box_info['cost']:
+                    raise Exception("Insufficient BST")
                 
-                if balance < cost:
-                    return {'success': False, 'error': 'Insufficient balance'}
-                
-                # Deduct balance
-                await conn.execute(
-                    "UPDATE users SET bst_balance = bst_balance - $1, updated_at = NOW() WHERE user_id = $2",
-                    cost, user_id
-                )
-                
-                # Increment released count
-                await conn.execute(
-                    "UPDATE box_types SET released = released + 1 WHERE box_type_id = $1",
-                    box_type_id
-                )
+                # Deduct BST and create box
+                await conn.execute("""
+                    UPDATE users SET bst_balance = bst_balance - $1
+                    WHERE user_id = $2
+                """, box_info['cost'], user_id)
                 
                 # Create box
-                box_id = await conn.fetchval(
-                    """INSERT INTO boxes (box_type_id, owner_user_id, source, status)
-                       VALUES ($1, $2, 'purchase', 'stored')
-                       RETURNING box_id""",
-                    box_type_id, user_id
-                )
+                box = await conn.fetchrow("""
+                    INSERT INTO boxes (box_type_id, owner_user_id, source)
+                    VALUES ($1, $2, 'purchase')
+                    RETURNING *
+                """, box_type, user_id)
                 
-                # Log transaction
-                await conn.execute(
-                    """INSERT INTO transactions (tx_type, from_user, to_user, amount_bst, item_data)
-                       VALUES ('purchase', $1, NULL, $2, $3)""",
-                    user_id, cost, {'box_id': str(box_id), 'box_type': box_type['name']}
-                )
+                # Update released count
+                await conn.execute("""
+                    UPDATE box_types SET released = released + 1
+                    WHERE box_type_id = $1
+                """, box_type)
                 
-                return {
-                    'success': True,
-                    'box_id': str(box_id),
-                    'box_name': box_type['name'],
-                    'cost': cost,
-                    'new_balance': balance - cost
-                }
-    
-    async def get_user_boxes(self, user_id: int) -> List[Dict]:
-        """Get user's stored boxes"""
-        async with self.pool.acquire() as conn:
-            rows = await conn.fetch(
-                """SELECT b.box_id, bt.box_type_id, bt.name, bt.sell_value
-                   FROM boxes b
-                   JOIN box_types bt ON b.box_type_id = bt.box_type_id
-                   WHERE b.owner_user_id = $1 AND b.status = 'stored'
-                   ORDER BY bt.cost_bst DESC""",
-                user_id
-            )
-            return [dict(row) for row in rows]
-    
-    async def open_box(self, box_id: str, user_id: int, reward_item: str, roll_value: float, odds: list) -> Dict:
-        """Open a mystery box and award item"""
+                # Record transaction
+                await conn.execute("""
+                    INSERT INTO transactions (user_id, tx_type, amount_bst, metadata)
+                    VALUES ($1, 'box_purchase', $2, $3)
+                """, user_id, -box_info['cost'], {"box_type": box_type, "box_id": box['box_id']})
+                
+                return dict(box)
+
+    async def open_box(self, box_id: str, user_id: int) -> Dict[str, Any]:
+        """Open a mystery box and get reward"""
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 # Verify box ownership and status
-                box = await conn.fetchrow(
-                    """SELECT b.*, bt.box_type_id
-                       FROM boxes b
-                       JOIN box_types bt ON b.box_type_id = bt.box_type_id
-                       WHERE b.box_id = $1 AND b.owner_user_id = $2 AND b.status = 'stored'
-                       FOR UPDATE""",
-                    box_id, user_id
-                )
+                box = await conn.fetchrow("""
+                    SELECT * FROM boxes 
+                    WHERE box_id = $1 AND owner_user_id = $2 AND status = 'owned'
+                """, box_id, user_id)
                 
                 if not box:
-                    return {'success': False, 'error': 'Box not found or already opened'}
+                    raise Exception("Box not found or already opened")
                 
-                # Mark box as opened
-                await conn.execute(
-                    "UPDATE boxes SET status = 'opened', opened_at = NOW() WHERE box_id = $1",
-                    box_id
-                )
+                # Get box type info
+                box_type = box['box_type_id']
+                box_info = config.BOX_TYPES[box_type]
                 
-                # Find the item
-                item = await conn.fetchrow(
-                    "SELECT * FROM items WHERE name = $1",
-                    reward_item
-                )
+                # Determine reward using weighted random
+                reward = self._get_box_reward(box_info['drops'])
+                
+                # Get item ID
+                item = await conn.fetchrow("""
+                    SELECT item_id FROM items WHERE name = $1
+                """, reward)
                 
                 if not item:
-                    # Log the opening without item
-                    await conn.execute(
-                        """INSERT INTO open_logs (user_id, box_id, box_type_id, reward_name, roll_value, odds_used)
-                           VALUES ($1, $2, $3, $4, $5, $6)""",
-                        user_id, box_id, box['box_type_id'], reward_item, roll_value, odds
-                    )
-                    return {'success': True, 'box_name': 'Mystery Box', 'reward': reward_item, 'item_value': 0}
+                    raise Exception("Item not found in database")
                 
-                # Add item to user's inventory
-                existing = await conn.fetchrow(
-                    "SELECT user_item_id, quantity FROM user_items WHERE user_id = $1 AND item_id = $2",
-                    user_id, item['item_id']
-                )
+                # Add item to user inventory
+                await conn.execute("""
+                    INSERT INTO user_items (user_id, item_id, obtained_from)
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT (user_id, item_id) DO UPDATE SET
+                        quantity = user_items.quantity + 1
+                """, user_id, item['item_id'], box_id)
                 
-                if existing:
-                    await conn.execute(
-                        "UPDATE user_items SET quantity = quantity + 1 WHERE user_item_id = $1",
-                        existing['user_item_id']
-                    )
-                else:
-                    await conn.execute(
-                        """INSERT INTO user_items (user_id, item_id, quantity, source_box_id)
-                           VALUES ($1, $2, 1, $3)""",
-                        user_id, item['item_id'], box_id
-                    )
+                # Mark box as opened
+                await conn.execute("""
+                    UPDATE boxes SET status = 'opened', opened_at = $1
+                    WHERE box_id = $2
+                """, datetime.utcnow(), box_id)
                 
-                # Log the opening
-                await conn.execute(
-                    """INSERT INTO open_logs (user_id, box_id, box_type_id, reward_item_id, reward_name, roll_value, odds_used)
-                       VALUES ($1, $2, $3, $4, $5, $6, $7)""",
-                    user_id, box_id, box['box_type_id'], item['item_id'], reward_item, roll_value, odds
-                )
+                # Record transaction
+                await conn.execute("""
+                    INSERT INTO transactions (user_id, tx_type, amount_bst, metadata)
+                    VALUES ($1, 'box_opened', 0, $2)
+                """, user_id, {"box_id": box_id, "reward": reward})
                 
-                return {
-                    'success': True,
-                    'box_name': 'Mystery Box',
-                    'reward': reward_item,
-                    'item_value': float(item['value_usd'])
-                }
-    
-    async def get_user_inventory(self, user_id: int) -> Dict:
-        """Get user's complete inventory"""
+                return {"item": reward, "box_type": box_info['name']}
+
+    def _get_box_reward(self, drops: List[Dict]) -> str:
+        """Get random reward based on weighted chances"""
+        total = sum(drop['chance'] for drop in drops)
+        rand = random.uniform(0, total)
+        current = 0
+        
+        for drop in drops:
+            current += drop['chance']
+            if rand <= current:
+                return drop['item']
+        
+        return drops[0]['item']
+
+    # Inventory Operations
+    async def get_user_inventory(self, user_id: int) -> Dict[str, Any]:
+        """Get user's boxes and items"""
         async with self.pool.acquire() as conn:
-            # Get boxes
-            boxes = await conn.fetch(
-                """SELECT bt.name, bt.short_name, COUNT(*) as count
-                   FROM boxes b
-                   JOIN box_types bt ON b.box_type_id = bt.box_type_id
-                   WHERE b.owner_user_id = $1 AND b.status = 'stored'
-                   GROUP BY bt.name, bt.short_name
-                   ORDER BY bt.cost_bst DESC""",
-                user_id
-            )
+            # Get owned boxes
+            boxes = await conn.fetch("""
+                SELECT b.box_id, bt.name, bt.cost_bst
+                FROM boxes b
+                JOIN box_types bt ON b.box_type_id = bt.box_type_id
+                WHERE b.owner_user_id = $1 AND b.status = 'owned'
+            """, user_id)
             
-            # Get items
-            items = await conn.fetch(
-                """SELECT i.name, i.short_name, i.value_usd, SUM(ui.quantity) as quantity
-                   FROM user_items ui
-                   JOIN items i ON ui.item_id = i.item_id
-                   WHERE ui.user_id = $1
-                   GROUP BY i.item_id, i.name, i.short_name, i.value_usd
-                   ORDER BY i.value_usd DESC""",
-                user_id
-            )
+            # Get items with quantities
+            items = await conn.fetch("""
+                SELECT i.name, i.value_usd, ui.quantity
+                FROM user_items ui
+                JOIN items i ON ui.item_id = i.item_id
+                WHERE ui.user_id = $1 AND ui.quantity > 0
+            """, user_id)
             
             return {
-                'boxes': [dict(row) for row in boxes],
-                'items': [dict(row) for row in items]
+                "boxes": [dict(box) for box in boxes],
+                "items": [dict(item) for item in items]
             }
-    
-    # ==================== TICKET OPERATIONS ====================
-    
-    async def create_ticket(self, creator_id: int, channel_id: int) -> int:
-        """Create a new ticket and return ticket number"""
+
+    # Shop Operations
+    async def get_shop_items(self) -> List[Dict[str, Any]]:
+        """Get all available shop items"""
         async with self.pool.acquire() as conn:
-            ticket_number = await conn.fetchval(
-                """INSERT INTO tickets (creator_id, channel_id, status)
-                   VALUES ($1, $2, 'pending')
-                   RETURNING ticket_number""",
-                creator_id, channel_id
-            )
-            return ticket_number
-    
-    async def get_ticket_by_channel(self, channel_id: int) -> Optional[Dict]:
-        """Get ticket by channel ID"""
-        async with self.pool.acquire() as conn:
-            ticket = await conn.fetchrow(
-                "SELECT * FROM tickets WHERE channel_id = $1",
-                channel_id
-            )
-            return dict(ticket) if ticket else None
-    
-    async def add_partner_to_ticket(self, ticket_number: int, partner_id: int):
-        """Add partner to ticket"""
-        async with self.pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE tickets SET partner_id = $1, status = 'active' WHERE ticket_number = $2",
-                partner_id, ticket_number
-            )
-    
-    # ==================== GIVEAWAY OPERATIONS ====================
-    
-    async def create_giveaway(self, host_id: int, prize_type: str, prize_amount: float,
-                             prize_item_name: str, winners_count: int, duration_minutes: int,
-                             channel_id: int, required_role: Optional[int] = None) -> str:
-        """Create a giveaway"""
-        async with self.pool.acquire() as conn:
-            ends_at = datetime.now() + timedelta(minutes=duration_minutes)
-            
-            giveaway_id = await conn.fetchval(
-                """INSERT INTO giveaways 
-                   (host_id, prize_type, prize_amount, prize_item_name, winners_count, 
-                    required_role, duration_minutes, channel_id, ends_at)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                   RETURNING giveaway_id""",
-                host_id, prize_type, prize_amount, prize_item_name, winners_count,
-                required_role, duration_minutes, channel_id, ends_at
-            )
-            return str(giveaway_id)
-    
-    async def enter_giveaway(self, giveaway_id: str, user_id: int) -> bool:
-        """Enter a user into a giveaway"""
-        async with self.pool.acquire() as conn:
-            try:
-                await conn.execute(
-                    """INSERT INTO giveaway_entries (giveaway_id, user_id)
-                       VALUES ($1, $2)""",
-                    giveaway_id, user_id
-                )
-                return True
-            except:
-                return False
-    
-    # ==================== SHOP OPERATIONS ====================
-    
-    async def create_shop_item(self, name: str, description: str, price: float,
-                               stock: int, created_by: int) -> str:
-        """Create a shop item"""
-        async with self.pool.acquire() as conn:
-            item_id = await conn.fetchval(
-                """INSERT INTO shop_items (name, description, price_bst, stock, created_by)
-                   VALUES ($1, $2, $3, $4, $5)
-                   RETURNING shop_item_id""",
-                name, description, price, stock, created_by
-            )
-            return str(item_id)
-    
-    async def get_shop_items(self) -> List[Dict]:
-        """Get all active shop items"""
-        async with self.pool.acquire() as conn:
-            rows = await conn.fetch(
-                """SELECT * FROM shop_items 
-                   WHERE is_active = TRUE 
-                   AND (stock > 0 OR stock = -1)
-                   ORDER BY created_at DESC"""
-            )
-            return [dict(row) for row in rows]
-    
-    async def purchase_shop_item(self, item_id: str, buyer_id: int) -> Dict:
-        """Purchase a shop item"""
+            items = await conn.fetch("""
+                SELECT * FROM shop_items 
+                WHERE quantity > 0 AND is_active = true
+                ORDER BY price_bst
+            """)
+            return [dict(item) for item in items]
+
+    async def purchase_shop_item(self, user_id: int, item_id: str) -> Dict[str, Any]:
+        """Purchase item from shop"""
         async with self.pool.acquire() as conn:
             async with conn.transaction():
-                item = await conn.fetchrow(
-                    "SELECT * FROM shop_items WHERE shop_item_id = $1 FOR UPDATE",
-                    item_id
-                )
+                # Get item details
+                item = await conn.fetchrow("""
+                    SELECT * FROM shop_items 
+                    WHERE item_id = $1 AND quantity > 0 AND is_active = true
+                """, item_id)
                 
-                if not item or not item['is_active']:
-                    return {'success': False, 'error': 'Item not available'}
+                if not item:
+                    raise Exception("Item not available")
                 
-                if item['stock'] == 0:
-                    return {'success': False, 'error': 'Out of stock'}
+                # Check user balance
+                user = await conn.fetchrow("""
+                    SELECT bst_balance FROM users WHERE user_id = $1
+                """, user_id)
                 
-                balance = await self.get_balance(buyer_id)
-                price = float(item['price_bst'])
+                if not user or user['bst_balance'] < item['price_bst']:
+                    raise Exception("Insufficient BST")
                 
-                if balance < price:
-                    return {'success': False, 'error': 'Insufficient balance'}
+                # Deduct BST
+                await conn.execute("""
+                    UPDATE users SET bst_balance = bst_balance - $1
+                    WHERE user_id = $2
+                """, item['price_bst'], user_id)
                 
-                await self.update_balance(buyer_id, price, 'subtract')
+                # Reduce item quantity
+                await conn.execute("""
+                    UPDATE shop_items SET quantity = quantity - 1
+                    WHERE item_id = $1
+                """, item_id)
                 
-                if item['stock'] != -1:
-                    await conn.execute(
-                        "UPDATE shop_items SET stock = stock - 1 WHERE shop_item_id = $1",
-                        item_id
-                    )
+                # Add to user inventory
+                await conn.execute("""
+                    INSERT INTO user_items (user_id, item_id, obtained_from)
+                    VALUES ($1, $2, 'shop')
+                    ON CONFLICT (user_id, item_id) DO UPDATE SET
+                        quantity = user_items.quantity + 1
+                """, user_id, item['base_item_id'])
                 
-                await conn.execute(
-                    """INSERT INTO shop_purchases (shop_item_id, buyer_id, price_paid)
-                       VALUES ($1, $2, $3)""",
-                    item_id, buyer_id, price
-                )
+                # Record transaction
+                await conn.execute("""
+                    INSERT INTO transactions (user_id, tx_type, amount_bst, metadata)
+                    VALUES ($1, 'shop_purchase', $2, $3)
+                """, user_id, -item['price_bst'], {"item_id": item_id, "item_name": item['name']})
                 
-                return {
-                    'success': True,
-                    'item_name': item['name'],
-                    'price': price,
-                    'new_balance': balance - price
-                }
-    
-    # ==================== LOGGING ====================
-    
-    async def log_transaction(self, tx_type: str, from_user: int, to_user: int, 
-                              amount: float, metadata: dict = None):
-        """Log a transaction"""
+                return dict(item)
+
+    # Gift Operations
+    async def send_gift(self, from_user: int, to_user: int, amount: float = 0, item_id: str = None) -> bool:
+        """Send BST or item as gift"""
         async with self.pool.acquire() as conn:
-            await conn.execute(
-                """INSERT INTO transactions (tx_type, from_user, to_user, amount_bst, metadata)
-                   VALUES ($1, $2, $3, $4, $5)""",
-                tx_type, from_user, to_user, amount, metadata or {}
-            )
-    
-    async def log_action(self, actor_id: int, action: str, target_user_id: int = None, 
-                        details: dict = None):
-        """Log an admin action"""
+            async with conn.transaction():
+                if amount > 0:
+                    # Gift BST
+                    # Check sender balance
+                    sender = await conn.fetchrow("""
+                        SELECT bst_balance FROM users WHERE user_id = $1
+                    """, from_user)
+                    
+                    if not sender or sender['bst_balance'] < amount:
+                        return False
+                    
+                    # Transfer BST
+                    await conn.execute("""
+                        UPDATE users SET bst_balance = bst_balance - $1
+                        WHERE user_id = $2
+                    """, amount, from_user)
+                    
+                    await conn.execute("""
+                        UPDATE users SET bst_balance = bst_balance + $1
+                        WHERE user_id = $2
+                    """, amount, to_user)
+                    
+                    # Record gift
+                    await conn.execute("""
+                        INSERT INTO gifts (from_user_id, to_user_id, amount_bst, item_id)
+                        VALUES ($1, $2, $3, $4)
+                    """, from_user, to_user, amount, item_id)
+                    
+                    # Record transactions
+                    await conn.execute("""
+                        INSERT INTO transactions (user_id, tx_type, amount_bst, metadata)
+                        VALUES ($1, 'gift_sent', $2, $3)
+                    """, from_user, -amount, {"to_user": to_user, "gift_type": "bst"})
+                    
+                    await conn.execute("""
+                        INSERT INTO transactions (user_id, tx_type, amount_bst, metadata)
+                        VALUES ($1, 'gift_received', $2, $3)
+                    """, to_user, amount, {"from_user": from_user, "gift_type": "bst"})
+                
+                elif item_id:
+                    # Gift item
+                    # Check sender has item
+                    sender_item = await conn.fetchrow("""
+                        SELECT quantity FROM user_items 
+                        WHERE user_id = $1 AND item_id = $2 AND quantity > 0
+                    """, from_user, item_id)
+                    
+                    if not sender_item:
+                        return False
+                    
+                    # Transfer item
+                    await conn.execute("""
+                        UPDATE user_items SET quantity = quantity - 1
+                        WHERE user_id = $1 AND item_id = $2
+                    """, from_user, item_id)
+                    
+                    await conn.execute("""
+                        INSERT INTO user_items (user_id, item_id, obtained_from)
+                        VALUES ($1, $2, 'gift')
+                        ON CONFLICT (user_id, item_id) DO UPDATE SET
+                            quantity = user_items.quantity + 1
+                    """, to_user, item_id)
+                    
+                    # Record gift
+                    await conn.execute("""
+                        INSERT INTO gifts (from_user_id, to_user_id, amount_bst, item_id)
+                        VALUES ($1, $2, $3, $4)
+                    """, from_user, to_user, 0, item_id)
+                
+                return True
+
+    # Admin Operations
+    async def admin_add_points(self, user_id: int, amount: float, admin_id: int) -> bool:
+        """Admin add points to user"""
         async with self.pool.acquire() as conn:
-            await conn.execute(
-                """INSERT INTO logs (actor_id, action, target_user_id, details)
-                   VALUES ($1, $2, $3, $4)""",
-                actor_id, action, target_user_id, details or {}
-            )
+            async with conn.transaction():
+                result = await conn.execute("""
+                    UPDATE users SET bst_balance = bst_balance + $1
+                    WHERE user_id = $2
+                """, amount, user_id)
+                
+                if "UPDATE 1" in result:
+                    await conn.execute("""
+                        INSERT INTO transactions (user_id, tx_type, amount_bst, metadata)
+                        VALUES ($1, 'admin_add', $2, $3)
+                    """, user_id, amount, {"admin_id": admin_id})
+                    return True
+                return False
+
+    async def get_economy_stats(self) -> Dict[str, Any]:
+        """Get economy statistics"""
+        async with self.pool.acquire() as conn:
+            total_bst = await conn.fetchval("SELECT SUM(bst_balance) FROM users")
+            total_users = await conn.fetchval("SELECT COUNT(*) FROM users")
+            total_transactions = await conn.fetchval("SELECT COUNT(*) FROM transactions")
+            
+            return {
+                "total_bst": total_bst or 0,
+                "total_users": total_users or 0,
+                "total_transactions": total_transactions or 0
+            }
+
+    # Secure Trading Operations
+    async def get_next_ticket_number(self) -> int:
+        """Get next ticket number"""
+        async with self.pool.acquire() as conn:
+            result = await conn.fetchval("""
+                SELECT COALESCE(MAX(ticket_number), 0) + 1 
+                FROM secure_trades
+            """)
+            return result
+
+    async def create_secure_trade(self, creator_id: int, channel_id: int) -> Dict[str, Any]:
+        """Create a new secure trade"""
+        async with self.pool.acquire() as conn:
+            trade = await conn.fetchrow("""
+                INSERT INTO secure_trades (creator_id, channel_id)
+                VALUES ($1, $2)
+                RETURNING *
+            """, creator_id, channel_id)
+            return dict(trade)
+
+    async def update_secure_trade(self, trade_id: str, updates: Dict[str, Any]) -> bool:
+        """Update secure trade"""
+        async with self.pool.acquire() as conn:
+            set_clause = ", ".join([f"{key} = ${i+2}" for i, key in enumerate(updates.keys())])
+            values = list(updates.values())
+            
+            result = await conn.execute(f"""
+                UPDATE secure_trades 
+                SET {set_clause}, last_activity = $1
+                WHERE trade_id = ${len(values) + 2}
+            """, datetime.utcnow(), *values, trade_id)
+            
+            return "UPDATE 1" in result
+
+    async def get_secure_trade_by_channel(self, channel_id: int) -> Dict[str, Any]:
+        """Get secure trade by channel ID"""
+        async with self.pool.acquire() as conn:
+            trade = await conn.fetchrow("""
+                SELECT * FROM secure_trades 
+                WHERE channel_id = $1 AND status = 'active'
+            """, channel_id)
+            return dict(trade) if trade else None
 
 # Global database instance
 db = Database()
