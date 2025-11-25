@@ -238,14 +238,14 @@ class Admin(commands.Cog):
 
     # ==================== MANAGER COMMANDS ====================
 
-    @app_commands.command(name="addbst", description="Add BST to user (Manager)")
+    @app_commands.command(name="addbst", description="Add BST to user FROM POOL (Manager)")
     @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
     @app_commands.describe(
         user="User to give BST to",
-        amount="Amount of BST to add"
+        amount="Amount of BST to add FROM POOL"
     )
     async def addbst(self, interaction: discord.Interaction, user: discord.Member, amount: float):
-        """Add BST to user"""
+        """Add BST to user FROM POOL ONLY"""
         if not self.has_manager_role(interaction):
             await interaction.response.send_message(
                 "❌ You don't have permission! (Manager role required)",
@@ -261,22 +261,48 @@ class Admin(commands.Cog):
             return
 
         try:
-            await self.bot.db.add_bst(user.id, amount)
-            new_balance = await self.bot.db.get_balance(user.id)
+            pool_balance = await self.bot.db.get_pool_balance()
+            
+            if pool_balance < amount:
+                await interaction.response.send_message(
+                    f"❌ Not enough BST in pool! Pool has **{pool_balance:.2f} BST**",
+                    ephemeral=True
+                )
+                return
+
+            # Distribute from pool
+            success = await self.bot.db.distribute_from_pool(user.id, amount)
+            
+            if not success:
+                await interaction.response.send_message(
+                    "❌ Failed to distribute BST from pool!",
+                    ephemeral=True
+                )
+                return
+
+            new_user_balance = await self.bot.db.get_balance(user.id)
+            new_pool_balance = await self.bot.db.get_pool_balance()
 
             embed = discord.Embed(
-                title="✅ BST Added",
-                description=f"Added **{amount:.2f} BST** to {user.mention}",
+                title="✅ BST Distributed from Pool",
+                description=f"Gave **{amount:.2f} BST** to {user.mention}",
                 color=discord.Color.green()
             )
 
             embed.add_field(
-                name="💰 New Balance",
-                value=f"**{new_balance:.2f} BST**",
-                inline=False
+                name="💰 User Balance",
+                value=f"**{new_user_balance:.2f} BST**",
+                inline=True
             )
 
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            embed.add_field(
+                name="🏦 Pool Remaining",
+                value=f"**{new_pool_balance:.2f} BST**",
+                inline=True
+            )
+
+            # PUBLIC - SEND TO CHANNEL
+            await interaction.response.send_message(embed=embed)
 
         except Exception as e:
             await interaction.response.send_message(
