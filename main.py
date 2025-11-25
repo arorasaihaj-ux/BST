@@ -24,18 +24,28 @@ class CleanEconomyBot(commands.Bot):
         self.initialized = False
         
         # Role IDs from .env
-        self.owner_role_id = int(os.getenv('OWNER_ROLE_ID'))  # Full control
-        self.manager_role_id = int(os.getenv('MANAGER_ROLE_ID'))  # User BST management
+        self.owner_role_id = int(os.getenv('OWNER_ROLE_ID'))
+        self.manager_role_id = int(os.getenv('MANAGER_ROLE_ID'))
         self.guild_id = int(os.getenv('GUILD_ID'))
 
     async def setup_hook(self):
-        """Load cogs"""
+        """Load cogs and clear old commands"""
+        # First, clear ALL existing commands globally
+        self.tree.clear_commands(guild=None)
+        print("🗑️ Cleared global commands")
+        
+        # Clear guild-specific commands
+        guild = discord.Object(id=self.guild_id)
+        self.tree.clear_commands(guild=guild)
+        print("🗑️ Cleared guild commands")
+        
+        # Now load only the cogs we want
         cogs = [
-            'cogs.economy',    # Message tracking + BST earning
-            'cogs.boxes',      # Box buying/opening system
-            'cogs.inventory',  # View inventory
-            'cogs.trading',    # Secure BST trading
-            'cogs.admin'       # Owner/Manager commands
+            'cogs.economy',
+            'cogs.boxes', 
+            'cogs.inventory',
+            'cogs.trading',
+            'cogs.admin'
         ]
         
         for cog in cogs:
@@ -48,18 +58,20 @@ class CleanEconomyBot(commands.Bot):
     async def on_ready(self):
         print(f'✅ {self.user} is online!')
         print(f'📊 Guild ID: {self.guild_id}')
-        print(f'👑 Owner Role: {self.owner_role_id}')
-        print(f'🔧 Manager Role: {self.manager_role_id}')
         
         if not self.initialized:
             # Connect database
             self.db = Database()
             await self.db.connect()
             
-            # Sync commands
-            await self.tree.sync(guild=discord.Object(id=self.guild_id))
+            # SYNC ONLY TO SPECIFIC GUILD - This prevents global command pollution
+            guild = discord.Object(id=self.guild_id)
+            self.tree.copy_global_to(guild=guild)
+            await self.tree.sync(guild=guild)
+            
             self.initialized = True
-            print("✅ Commands synced")
+            print("✅ Commands synced to guild only")
+            print("🔄 OLD COMMANDS WILL BE REMOVED AUTOMATICALLY")
 
     async def start_web_server(self):
         """Health check for Render"""
