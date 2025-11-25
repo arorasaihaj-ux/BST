@@ -7,6 +7,9 @@ from aiohttp import web
 import sys
 import traceback
 
+# Import the database instance
+from database import db
+
 load_dotenv()
 
 class BSTEconomyBot(commands.Bot):
@@ -24,22 +27,31 @@ class BSTEconomyBot(commands.Bot):
         self.initialized = False
 
     async def setup_hook(self):
-        # Load all cogs - CORRECTED LIST (14 cogs)
+        # Initialize database connection FIRST
+        try:
+            await db.connect()
+            print("✓ Database connected successfully")
+        except Exception as e:
+            print(f"✗ Database connection failed: {e}")
+            return
+
+        # Load all cogs - CORRECTED LIST (15 cogs with test)
         cogs = [
-            'cogs.economy',          # Economy & messages
-            'cogs.boxes',            # Mystery boxes & panels
-            'cogs.shop',             # Shop system
-            'cogs.secure_trading',   # Premium trading system
-            'cogs.gifts',            # Gift system
-            'cogs.bounties',         # Bounty board
-            'cogs.auctions',         # Auction house
-            'cogs.rentals',          # Rental system
-            'cogs.achievements',     # Achievements
-            'cogs.collections',      # Collections
-            'cogs.events',           # Events system
-            'cogs.loyalty',          # Loyalty program
-            'cogs.giveaways',        # Giveaway system
-            'cogs.admin'             # Admin commands
+            'cogs.test',           # Test commands first
+            'cogs.economy',        # Economy & messages
+            'cogs.boxes',          # Mystery boxes & panels
+            'cogs.shop',           # Shop system
+            'cogs.secure_trading', # Premium trading system
+            'cogs.gifts',          # Gift system
+            'cogs.bounties',       # Bounty board
+            'cogs.auctions',       # Auction house
+            'cogs.rentals',        # Rental system
+            'cogs.achievements',   # Achievements
+            'cogs.collections',    # Collections
+            'cogs.events',         # Events system
+            'cogs.loyalty',        # Loyalty program
+            'cogs.giveaways',      # Giveaway system
+            'cogs.admin'           # Admin commands
         ]
         
         for cog in cogs:
@@ -54,12 +66,15 @@ class BSTEconomyBot(commands.Bot):
 
     async def on_ready(self):
         print(f'✓ {self.user} is online!')
-        print(f'✓ Guild: {len(self.guilds)}')
+        print(f'✓ Guilds: {len(self.guilds)}')
         
         if not self.initialized:
-            await self.tree.sync()
-            self.initialized = True
-            print("✓ Slash commands synced")
+            try:
+                await self.tree.sync()
+                self.initialized = True
+                print("✓ Slash commands synced globally")
+            except Exception as e:
+                print(f"✗ Command sync failed: {e}")
 
     async def on_message(self, message):
         if message.author.bot:
@@ -89,14 +104,23 @@ class BSTEconomyBot(commands.Bot):
         site = web.TCPSite(runner, '0.0.0.0', 8080)
         await site.start()
 
+    async def close(self):
+        """Close the database connection when bot shuts down"""
+        await db.close()
+        await super().close()
+
 async def main():
     bot = BSTEconomyBot()
     
-    # Start web server for Render
-    await bot.start_web_server()
-    
-    # Start the bot
-    await bot.start(os.getenv('DISCORD_TOKEN'))
+    try:
+        # Start web server for Render
+        await bot.start_web_server()
+        
+        # Start the bot
+        await bot.start(os.getenv('DISCORD_TOKEN'))
+    except Exception as e:
+        print(f"Fatal error: {e}")
+        await bot.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
