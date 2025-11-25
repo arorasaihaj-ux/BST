@@ -10,11 +10,8 @@ async def send_error(ctx_or_interaction, message: str):
         color=config.Colors.ERROR
     )
     
-    if isinstance(ctx_or_interaction, discord.Interaction):
-        if ctx_or_interaction.response.is_done():
-            await ctx_or_interaction.followup.send(embed=embed, ephemeral=True)
-        else:
-            await ctx_or_interaction.response.send_message(embed=embed, ephemeral=True)
+    if hasattr(ctx_or_interaction, 'response'):
+        await ctx_or_interaction.response.send_message(embed=embed, ephemeral=True)
     else:
         await ctx_or_interaction.send(embed=embed, ephemeral=True)
 
@@ -25,106 +22,128 @@ async def send_success(ctx_or_interaction, message: str):
         color=config.Colors.SUCCESS
     )
     
-    if isinstance(ctx_or_interaction, discord.Interaction):
-        if ctx_or_interaction.response.is_done():
-            await ctx_or_interaction.followup.send(embed=embed, ephemeral=True)
-        else:
-            await ctx_or_interaction.response.send_message(embed=embed, ephemeral=True)
+    if hasattr(ctx_or_interaction, 'response'):
+        await ctx_or_interaction.response.send_message(embed=embed, ephemeral=True)
     else:
         await ctx_or_interaction.send(embed=embed, ephemeral=True)
 
-async def send_info(ctx_or_interaction, message: str):
-    """Send an info message"""
+async def send_warning(ctx_or_interaction, message: str):
+    """Send a warning message"""
     embed = discord.Embed(
         description=config.Design.small_caps(message),
-        color=config.Colors.INFO
-    )
-    
-    if isinstance(ctx_or_interaction, discord.Interaction):
-        if ctx_or_interaction.response.is_done():
-            await ctx_or_interaction.followup.send(embed=embed, ephemeral=True)
-        else:
-            await ctx_or_interaction.response.send_message(embed=embed, ephemeral=True)
-    else:
-        await ctx_or_interaction.send(embed=embed, ephemeral=True)
-
-def format_bst(amount: float) -> str:
-    """Format BST amount consistently"""
-    return f"{amount:.2f} BST"
-
-def truncate_text(text: str, max_length: int = 100) -> str:
-    """Truncate text to max length"""
-    if len(text) <= max_length:
-        return text
-    return text[:max_length-3] + "..."
-
-async def confirm_action(ctx, message: str, timeout: int = 30) -> bool:
-    """
-    Ask user to confirm an action
-    
-    Returns:
-        bool: True if confirmed, False otherwise
-    """
-    embed = discord.Embed(
-        description=f"{config.Design.small_caps(message)}\n\n{config.Design.small_caps('react to confirm')}",
         color=config.Colors.WARNING
     )
     
-    view = ConfirmView(timeout=timeout)
-    msg = await ctx.send(embed=embed, view=view)
-    
-    await view.wait()
-    
-    await msg.delete()
-    
-    return view.value
+    if hasattr(ctx_or_interaction, 'response'):
+        await ctx_or_interaction.response.send_message(embed=embed, ephemeral=True)
+    else:
+        await ctx_or_interaction.send(embed=embed, ephemeral=True)
 
-class ConfirmView(discord.ui.View):
-    def __init__(self, timeout: int = 30):
-        super().__init__(timeout=timeout)
-        self.value = None
-    
-    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.green)
-    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.value = True
-        self.stop()
-        await interaction.response.defer()
-    
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red)
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.value = False
-        self.stop()
-        await interaction.response.defer()
+def format_bst_amount(amount: float) -> str:
+    """Format BST amount with proper decimal places"""
+    return f"{amount:.2f}"
 
-class Paginator:
-    """Simple pagination for embeds"""
-    def __init__(self, items: List, per_page: int = 10):
-        self.items = items
-        self.per_page = per_page
-        self.pages = [items[i:i + per_page] for i in range(0, len(items), per_page)]
-        self.current_page = 0
+def format_large_number(number: int) -> str:
+    """Format large numbers with commas"""
+    return f"{number:,}"
+
+async def paginate_embeds(ctx, embeds: List[discord.Embed], timeout: int = 60):
+    """Paginate through multiple embeds"""
+    if not embeds:
+        return
     
-    def get_page(self, page: int) -> List:
-        """Get specific page"""
-        if 0 <= page < len(self.pages):
-            self.current_page = page
-            return self.pages[page]
-        return []
+    current_page = 0
     
-    def next_page(self) -> Optional[List]:
-        """Get next page"""
-        if self.current_page < len(self.pages) - 1:
-            self.current_page += 1
-            return self.pages[self.current_page]
-        return None
+    # Create view with navigation buttons
+    class PaginationView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=timeout)
+            self.current_page = 0
+            self.embeds = embeds
+        
+        @discord.ui.button(label="◀", style=discord.ButtonStyle.secondary)
+        async def previous(self, interaction: discord.Interaction, button: discord.ui.Button):
+            if self.current_page > 0:
+                self.current_page -= 1
+                await interaction.response.edit_message(embed=self.embeds[self.current_page])
+        
+        @discord.ui.button(label="▶", style=discord.ButtonStyle.secondary)
+        async def next(self, interaction: discord.Interaction, button: discord.ui.Button):
+            if self.current_page < len(self.embeds) - 1:
+                self.current_page += 1
+                await interaction.response.edit_message(embed=self.embeds[self.current_page])
+        
+        @discord.ui.button(label="❌", style=discord.ButtonStyle.danger)
+        async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
+            await interaction.response.defer()
+            await interaction.delete_original_response()
+            self.stop()
     
-    def prev_page(self) -> Optional[List]:
-        """Get previous page"""
-        if self.current_page > 0:
-            self.current_page -= 1
-            return self.pages[self.current_page]
-        return None
+    view = PaginationView()
+    message = await ctx.send(embed=embeds[0], view=view)
     
-    @property
-    def total_pages(self) -> int:
-        return len(self.pages)
+    # Wait for timeout
+    await asyncio.sleep(timeout)
+    try:
+        await message.edit(view=None)
+    except:
+        pass
+
+def create_progress_bar(progress: float, total: float, length: int = 20) -> str:
+    """Create a visual progress bar"""
+    if total == 0:
+        return "[" + " " * length + "]"
+    
+    percentage = min(progress / total, 1.0)
+    filled = int(length * percentage)
+    bar = "█" * filled + "░" * (length - filled)
+    return f"[{bar}] {percentage:.1%}"
+
+async def get_user_display(user_id: int, bot) -> str:
+    """Get user display name from user ID"""
+    user = bot.get_user(user_id)
+    if user:
+        return user.display_name
+    return f"User {user_id}"
+
+def safe_divide(numerator: float, denominator: float) -> float:
+    """Safely divide two numbers, return 0 if denominator is 0"""
+    if denominator == 0:
+        return 0.0
+    return numerator / denominator
+
+class TimeConverter:
+    """Convert time strings to seconds"""
+    
+    @staticmethod
+    def to_seconds(time_str: str) -> Optional[int]:
+        """Convert time string to seconds"""
+        try:
+            time_str = time_str.lower().strip()
+            
+            if time_str.endswith('s'):
+                return int(time_str[:-1])
+            elif time_str.endswith('m'):
+                return int(time_str[:-1]) * 60
+            elif time_str.endswith('h'):
+                return int(time_str[:-1]) * 3600
+            elif time_str.endswith('d'):
+                return int(time_str[:-1]) * 86400
+            else:
+                # Assume minutes if no unit specified
+                return int(time_str) * 60
+                
+        except (ValueError, AttributeError):
+            return None
+    
+    @staticmethod
+    def to_readable(seconds: int) -> str:
+        """Convert seconds to readable time"""
+        if seconds < 60:
+            return f"{seconds}s"
+        elif seconds < 3600:
+            return f"{seconds // 60}m"
+        elif seconds < 86400:
+            return f"{seconds // 3600}h"
+        else:
+            return f"{seconds // 86400}d"
