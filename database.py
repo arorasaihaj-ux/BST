@@ -7,26 +7,43 @@ import random
 class Database:
     def __init__(self):
         self.pool: Optional[asyncpg.Pool] = None
+        self._connected = False
 
     async def connect(self):
         """Initialize database connection pool with pgbouncer fix"""
-        self.pool = await asyncpg.create_pool(
-            config.DATABASE_URL,
-            min_size=1,
-            max_size=5,
-            statement_cache_size=0  # Fix for pgbouncer
-        )
-        print("✓ Database connected")
+        try:
+            if not config.DATABASE_URL:
+                raise Exception("DATABASE_URL not found in environment variables")
+                
+            self.pool = await asyncpg.create_pool(
+                config.DATABASE_URL,
+                min_size=1,
+                max_size=5,
+                statement_cache_size=0  # Fix for pgbouncer
+            )
+            self._connected = True
+            print("✓ Database connected")
+        except Exception as e:
+            print(f"✗ Database connection error: {e}")
+            self._connected = False
+            raise
 
     async def close(self):
         """Close database connection"""
         if self.pool:
             await self.pool.close()
+            self._connected = False
             print("✓ Database disconnected")
+
+    def _ensure_connected(self):
+        """Ensure database is connected before operations"""
+        if not self._connected or not self.pool:
+            raise Exception("Database not connected. Please ensure the bot has started properly.")
 
     # User Operations
     async def get_user(self, user_id: int) -> Dict[str, Any]:
         """Get or create user"""
+        self._ensure_connected()
         async with self.pool.acquire() as conn:
             user = await conn.fetchrow("""
                 INSERT INTO users (user_id, discord_tag, bst_balance, total_messages, weekly_messages, last_active)
@@ -41,6 +58,7 @@ class Database:
 
     async def update_user_balance(self, user_id: int, amount: float) -> bool:
         """Update user BST balance"""
+        self._ensure_connected()
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 result = await conn.execute("""
@@ -54,6 +72,7 @@ class Database:
 
     async def record_message(self, user_id: int, discord_tag: str, channel_id: int) -> bool:
         """Record user message and award BST if eligible"""
+        self._ensure_connected()
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 # Get current week start
@@ -110,6 +129,7 @@ class Database:
     # Box Operations
     async def purchase_box(self, user_id: int, box_type: str) -> Dict[str, Any]:
         """Purchase a mystery box"""
+        self._ensure_connected()
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 # Get box info and check supply
@@ -159,6 +179,7 @@ class Database:
 
     async def open_box(self, box_id: str, user_id: int) -> Dict[str, Any]:
         """Open a mystery box and get reward"""
+        self._ensure_connected()
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 # Verify box ownership and status
@@ -223,6 +244,7 @@ class Database:
     # Inventory Operations
     async def get_user_inventory(self, user_id: int) -> Dict[str, Any]:
         """Get user's boxes and items"""
+        self._ensure_connected()
         async with self.pool.acquire() as conn:
             # Get owned boxes
             boxes = await conn.fetch("""
@@ -248,6 +270,7 @@ class Database:
     # Shop Operations
     async def get_shop_items(self) -> List[Dict[str, Any]]:
         """Get all available shop items"""
+        self._ensure_connected()
         async with self.pool.acquire() as conn:
             items = await conn.fetch("""
                 SELECT * FROM shop_items 
@@ -258,6 +281,7 @@ class Database:
 
     async def purchase_shop_item(self, user_id: int, item_id: str) -> Dict[str, Any]:
         """Purchase item from shop"""
+        self._ensure_connected()
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 # Get item details
@@ -308,6 +332,7 @@ class Database:
     # Gift Operations
     async def send_gift(self, from_user: int, to_user: int, amount: float = 0, item_id: str = None) -> bool:
         """Send BST or item as gift"""
+        self._ensure_connected()
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 if amount > 0:
@@ -383,6 +408,7 @@ class Database:
     # Admin Operations
     async def admin_add_points(self, user_id: int, amount: float, admin_id: int) -> bool:
         """Admin add points to user"""
+        self._ensure_connected()
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 result = await conn.execute("""
@@ -400,6 +426,7 @@ class Database:
 
     async def get_economy_stats(self) -> Dict[str, Any]:
         """Get economy statistics"""
+        self._ensure_connected()
         async with self.pool.acquire() as conn:
             total_bst = await conn.fetchval("SELECT SUM(bst_balance) FROM users")
             total_users = await conn.fetchval("SELECT COUNT(*) FROM users")
@@ -414,6 +441,7 @@ class Database:
     # Secure Trading Operations
     async def get_next_ticket_number(self) -> int:
         """Get next ticket number"""
+        self._ensure_connected()
         async with self.pool.acquire() as conn:
             result = await conn.fetchval("""
                 SELECT COALESCE(MAX(ticket_number), 0) + 1 
@@ -423,6 +451,7 @@ class Database:
 
     async def create_secure_trade(self, creator_id: int, channel_id: int) -> Dict[str, Any]:
         """Create a new secure trade"""
+        self._ensure_connected()
         async with self.pool.acquire() as conn:
             trade = await conn.fetchrow("""
                 INSERT INTO secure_trades (creator_id, channel_id)
@@ -433,6 +462,7 @@ class Database:
 
     async def update_secure_trade(self, trade_id: str, updates: Dict[str, Any]) -> bool:
         """Update secure trade"""
+        self._ensure_connected()
         async with self.pool.acquire() as conn:
             set_clause = ", ".join([f"{key} = ${i+2}" for i, key in enumerate(updates.keys())])
             values = list(updates.values())
@@ -447,6 +477,7 @@ class Database:
 
     async def get_secure_trade_by_channel(self, channel_id: int) -> Dict[str, Any]:
         """Get secure trade by channel ID"""
+        self._ensure_connected()
         async with self.pool.acquire() as conn:
             trade = await conn.fetchrow("""
                 SELECT * FROM secure_trades 
@@ -454,5 +485,14 @@ class Database:
             """, channel_id)
             return dict(trade) if trade else None
 
+    # Simple balance check for testing
+    async def get_balance(self, user_id: int) -> float:
+        """Get user balance for testing"""
+        self._ensure_connected()
+        async with self.pool.acquire() as conn:
+            result = await conn.fetchval("SELECT bst_balance FROM users WHERE user_id = $1", user_id)
+            return result or 0.0
+
 # Global database instance
 db = Database()
+              
