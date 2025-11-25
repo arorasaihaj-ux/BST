@@ -7,81 +7,74 @@ class Inventory(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name="inventory", description="View BST balance, boxes, and items")
+    @app_commands.command(name="inventory", description="View your inventory")
     @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
     async def inventory(self, interaction: discord.Interaction, user: discord.Member = None):
-        """View user inventory"""
         target = user or interaction.user
         
         try:
-            # Get BST balance
             balance = await self.bot.db.get_balance(target.id)
-            
-            # Get inventory
             inventory = await self.bot.db.get_inventory(target.id)
             
             embed = discord.Embed(
-                title=f"📦 {target.display_name}'s Inventory",
-                color=discord.Color.blue()
+                title=f"{target.display_name}'s Inventory",
+                color=0x5865F2
             )
             
             # BST Balance
             embed.add_field(
-                name="💰 BST Balance",
-                value=f"**{balance:.2f} BST**",
+                name="BST Balance",
+                value=f"```{balance:.2f} BST```",
                 inline=False
             )
             
             # Unopened Boxes
             if inventory['boxes']:
-                box_text = ""
+                box_list = []
                 for box in inventory['boxes']:
-                    box_emoji = "📦" if box['box_type'] == 'base' else "🎁"
-                    box_text += f"{box_emoji} **{box['box_type'].title()} Box** x{box['count']}\n"
+                    box_name = "Base Box" if box['box_type'] == 'base' else "Gold Box"
+                    box_list.append(f"• {box_name} x{box['count']}")
                 
                 embed.add_field(
-                    name="📦 Unopened Boxes",
-                    value=box_text,
+                    name="Unopened Boxes",
+                    value="\n".join(box_list),
                     inline=False
                 )
             else:
                 embed.add_field(
-                    name="📦 Unopened Boxes",
-                    value="*No boxes*",
+                    name="Unopened Boxes",
+                    value="*No boxes available*",
                     inline=False
                 )
             
-            # Items Won from Boxes
+            # Items Won
             if inventory['items']:
-                # Group items
-                items_text = ""
-                for item in inventory['items'][:15]:  # Limit to 15 items
-                    items_text += f"• **{item['item_name']}** x{item['quantity']}\n"
+                items_list = []
+                for item in inventory['items'][:20]:
+                    items_list.append(f"• {item['item_name']} x{item['quantity']}")
                 
-                if len(inventory['items']) > 15:
-                    items_text += f"\n*...and {len(inventory['items']) - 15} more items*"
+                if len(inventory['items']) > 20:
+                    items_list.append(f"\n*...and {len(inventory['items']) - 20} more items*")
                 
                 embed.add_field(
-                    name="🎁 Items Won",
-                    value=items_text,
+                    name="Items Won from Boxes",
+                    value="\n".join(items_list),
                     inline=False
                 )
             else:
                 embed.add_field(
-                    name="🎁 Items Won",
-                    value="*No items yet*\n\n*Open boxes to get items!*",
+                    name="Items Won from Boxes",
+                    value="*No items yet*\n\nOpen boxes to win items!",
                     inline=False
                 )
             
-            embed.set_footer(text="Use /boxpanel to purchase boxes • Open boxes with the opening panel")
+            embed.set_footer(text="Use /boxpanel to purchase boxes")
             
-            await interaction.response.send_message(embed=embed, ephemeral=target != interaction.user)
+            # Public when viewing others
+            await interaction.response.send_message(embed=embed, ephemeral=(target == interaction.user))
             
         except Exception as e:
-            await interaction.response.send_message(
-                f"❌ Error: {str(e)}",
-                ephemeral=True
-            )
+            await interaction.response.send_message(f"Error: {str(e)}", ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(Inventory(bot))
