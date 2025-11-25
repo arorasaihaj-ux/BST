@@ -140,6 +140,88 @@ class Database:
             )
             return float(result) if result else 0.0
 
+    # ==================== COMPLETE ECONOMY RESET ====================
+
+    async def reset_complete_economy(self) -> bool:
+        """Reset entire economy - ALL tables"""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                # Reset users
+                await conn.execute("UPDATE users SET bst_balance = 0.0, message_count = 0")
+                
+                # Reset economy pool
+                await conn.execute("UPDATE economy_pool SET pool_amount = 0.0 WHERE pool_id = 1")
+                
+                # Reset weekly cap
+                week_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                week_start = week_start - timedelta(days=week_start.weekday())
+                await conn.execute("""
+                    UPDATE weekly_cap SET bst_distributed = 0.0 
+                    WHERE week_start = $1
+                """, week_start.date())
+                
+                # Delete all boxes
+                await conn.execute("DELETE FROM boxes")
+                
+                # Delete all inventory items
+                await conn.execute("DELETE FROM inventory")
+                
+                # Reset trades
+                await conn.execute("DELETE FROM trades")
+                
+                return True
+
+    # ==================== ITEM MANAGEMENT ====================
+
+    async def remove_item(self, user_id: int, item_name: str, quantity: int = 1) -> bool:
+        """Remove item from user's inventory"""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                # Check if user has the item
+                current_quantity = await conn.fetchval("""
+                    SELECT quantity FROM inventory 
+                    WHERE user_id = $1 AND item_name = $2
+                """, user_id, item_name)
+                
+                if not current_quantity:
+                    return False  # User doesn't have this item
+                
+                if current_quantity < quantity:
+                    return False  # Not enough quantity
+                
+                if current_quantity == quantity:
+                    # Remove the item completely
+                    await conn.execute("""
+                        DELETE FROM inventory 
+                        WHERE user_id = $1 AND item_name = $2
+                    """, user_id, item_name)
+                else:
+                    # Reduce quantity
+                    await conn.execute("""
+                        UPDATE inventory 
+                        SET quantity = quantity - $1
+                        WHERE user_id = $2 AND item_name = $3
+                    """, quantity, user_id, item_name)
+                
+                return True
+
+    async def get_user_items(self, user_id: int) -> List[Dict]:
+        """Get all items for a user"""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT item_name, quantity 
+                FROM inventory 
+                WHERE user_id = $1 AND quantity > 0
+                ORDER BY item_name
+            """, user_id)
+            return [dict(row) for row in rows]
+
+    async def clear_user_inventory(self, user_id: int) -> bool:
+        """Clear all items from user's inventory"""
+        async with self.pool.acquire() as conn:
+            await conn.execute("DELETE FROM inventory WHERE user_id = $1", user_id)
+            return True
+
     # ==================== USERS ====================
     
     async def get_user(self, user_id: int) -> Dict[str, Any]:
