@@ -299,6 +299,16 @@ class Database:
             """, sender_id, receiver_id, trade_id)
             return True
 
+    async def set_trade_amount(self, trade_id: str, amount: float) -> bool:
+        """Set BST amount for trade"""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE trades 
+                SET bst_amount = $1, last_activity = NOW()
+                WHERE trade_id = $2
+            """, amount, trade_id)
+            return True
+
     async def update_trade_stage(self, trade_id: str, stage: str) -> bool:
         """Update trade stage"""
         async with self.pool.acquire() as conn:
@@ -355,11 +365,12 @@ class Database:
                         bst_balance = users.bst_balance + $2
                 """, receiver_id, amount)
                 
-                # Complete trade
+                # Complete trade and reset escrow amount
                 await conn.execute("""
                     UPDATE trades 
                     SET status = 'completed', 
                         stage = 'completed',
+                        escrow_amount = 0.00,
                         completed_at = NOW(),
                         last_activity = NOW()
                     WHERE trade_id = $1
@@ -384,10 +395,12 @@ class Database:
                         WHERE user_id = $2
                     """, trade['escrow_amount'], trade['sender_id'])
                 
-                # Mark as cancelled
+                # Mark as cancelled and reset escrow
                 await conn.execute("""
                     UPDATE trades 
-                    SET status = 'cancelled', last_activity = NOW()
+                    SET status = 'cancelled', 
+                        escrow_amount = 0.00,
+                        last_activity = NOW()
                     WHERE trade_id = $1
                 """, trade_id)
                 
