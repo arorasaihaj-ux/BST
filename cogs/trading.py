@@ -1,4 +1,4 @@
-import discord
+\import discord
 from discord.ext import commands, tasks
 from discord import app_commands
 import os
@@ -7,72 +7,64 @@ from datetime import datetime, timedelta
 TICKET_CATEGORY_ID = int(os.getenv('TICKET_CATEGORY_ID', 0))
 
 class TradingPanel(discord.ui.View):
+    """Persistent view for starting trades"""
     def __init__(self):
         super().__init__(timeout=None)
     
     @discord.ui.button(
-        label="Create Trade Ticket",
+        label="Start Secure Trade",
         style=discord.ButtonStyle.success,
-        custom_id="create_trade_ticket",
+        custom_id="start_trade_button",
+        emoji="🛡️"
     )
-    async def create_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def start_trade(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Create a new trade ticket"""
         try:
             guild = interaction.guild
             category = guild.get_channel(TICKET_CATEGORY_ID)
             
             if not category:
-                embed = discord.Embed(
-                    description=f"Trading system not configured!\n\nCategory ID `{TICKET_CATEGORY_ID}` not found.",
-                    color=0xED4245
+                await interaction.response.send_message(
+                    "❌ Trading system not configured!",
+                    ephemeral=True
                 )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
             
-            # Check for existing ticket
-            existing_ticket = None
+            # Check if user already has an active ticket
             for channel in category.text_channels:
                 if str(interaction.user.id) in channel.name:
-                    existing_ticket = channel
-                    break
+                    await interaction.response.send_message(
+                        f"❌ You already have an active trade ticket: {channel.mention}",
+                        ephemeral=True
+                    )
+                    return
             
-            if existing_ticket:
-                embed = discord.Embed(
-                    description=f"You already have an active ticket: {existing_ticket.mention}",
-                    color=0xED4245
-                )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
-                return
-            
-            # Create permissions
+            # Create ticket channel
             overwrites = {
                 guild.default_role: discord.PermissionOverwrite(read_messages=False),
                 interaction.user: discord.PermissionOverwrite(
                     read_messages=True,
-                    send_messages=True,
-                    attach_files=True,
-                    embed_links=True
+                    send_messages=True
                 ),
                 guild.me: discord.PermissionOverwrite(
                     read_messages=True,
                     send_messages=True,
-                    manage_channels=True,
-                    manage_messages=True
+                    manage_channels=True
                 )
             }
             
-            # Add admin/moderator access
+            # Add admin access
             for role in guild.roles:
-                if role.permissions.administrator or role.permissions.manage_channels:
+                if role.permissions.administrator:
                     overwrites[role] = discord.PermissionOverwrite(
                         read_messages=True,
                         send_messages=True
                     )
             
-            # Create ticket channel
             channel = await category.create_text_channel(
-                name=f"trade-{interaction.user.name}".lower(),
+                name=f"trade-{interaction.user.name}-{interaction.user.id}",
                 overwrites=overwrites,
-                topic=f"Trade Ticket | Creator: {interaction.user.display_name} ({interaction.user.id})"
+                topic=f"Secure BST Trade - Creator: {interaction.user.display_name}"
             )
             
             # Create trade in database
@@ -81,184 +73,207 @@ class TradingPanel(discord.ui.View):
                 channel.id
             )
             
-            # Welcome message
+            # Send welcome message
             embed = discord.Embed(
-                title="Secure BST Trade",
-                description=f"Welcome {interaction.user.mention}!\n\nYour secure trading ticket has been created.",
-                color=0x57F287
+                title="🛡️ Secure BST Trade",
+                description=f"Welcome {interaction.user.mention}!\n\nThis is your secure trading ticket.",
+                color=discord.Color.green()
             )
             
             embed.add_field(
-                name="How to Trade",
+                name="📋 How It Works",
                 value=(
-                    "**1.** Click 'Add Partner' to invite your trading partner\n"
-                    "**2.** Discuss and agree on BST amount\n"
-                    "**3.** Click 'Add to Escrow' to secure your BST\n"
-                    "**4.** Trading partner provides Roblox items\n"
-                    "**5.** Click 'Release BST' to complete the trade"
+                    "**Step 1:** Invite your trading partner\n"
+                    "**Step 2:** Agree on BST amount\n"
+                    "**Step 3:** Sender adds BST to escrow\n"
+                    "**Step 4:** Receiver provides Roblox items\n"
+                    "**Step 5:** Sender confirms & releases BST\n"
                 ),
                 inline=False
             )
             
             embed.add_field(
-                name="Security Features",
+                name="⚠️ Important",
                 value=(
-                    "• BST held safely in escrow\n"
-                    "• Admins can monitor trade\n"
-                    "• Refund available if needed\n"
-                    "• Auto-closes after 30min inactivity"
+                    "• Admins can see this channel\n"
+                    "• Ticket auto-closes after 30 min of inactivity\n"
+                    "• Use buttons below to manage trade\n"
                 ),
                 inline=False
             )
             
             embed.set_footer(text=f"Trade ID: {trade_id}")
             
-            view = TradeControls()
-            await channel.send(content=interaction.user.mention, embed=embed, view=view)
+            view = TradeControlView()
+            await channel.send(embed=embed, view=view)
             
-            # Response
-            response_embed = discord.Embed(
-                description=f"Trade ticket created: {channel.mention}",
-                color=0x57F287
+            await interaction.response.send_message(
+                f"✅ Trade ticket created: {channel.mention}",
+                ephemeral=True
             )
-            await interaction.response.send_message(embed=response_embed, ephemeral=True)
             
         except Exception as e:
-            embed = discord.Embed(
-                description=f"Failed to create ticket: {str(e)}",
-                color=0xED4245
+            await interaction.response.send_message(
+                f"❌ Error: {str(e)}",
+                ephemeral=True
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
 
-class TradeControls(discord.ui.View):
+class TradeControlView(discord.ui.View):
+    """Control panel for managing trades"""
     def __init__(self):
         super().__init__(timeout=None)
     
     @discord.ui.button(
         label="Add Partner",
         style=discord.ButtonStyle.primary,
-        custom_id="add_trade_partner"
+        custom_id="add_partner_button",
+        emoji="👥"
     )
     async def add_partner(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = PartnerModal()
+        """Add trading partner to ticket"""
+        modal = AddPartnerModal()
         await interaction.response.send_modal(modal)
     
     @discord.ui.button(
-        label="Add to Escrow",
+        label="Add BST to Escrow",
         style=discord.ButtonStyle.success,
-        custom_id="add_to_escrow"
+        custom_id="add_escrow_button",
+        emoji="💰"
     )
     async def add_escrow(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = EscrowModal()
+        """Add BST to secure escrow"""
+        modal = AddEscrowModal()
         await interaction.response.send_modal(modal)
     
     @discord.ui.button(
         label="Release BST",
         style=discord.ButtonStyle.danger,
-        custom_id="release_escrow_bst"
+        custom_id="release_bst_button",
+        emoji="✅"
     )
     async def release_bst(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Release BST from escrow"""
         try:
+            # Get trade info
             trade = await interaction.client.db.get_trade_by_channel(interaction.channel.id)
             
             if not trade:
-                await interaction.response.send_message("Trade not found!", ephemeral=True)
+                await interaction.response.send_message(
+                    "❌ Trade not found!",
+                    ephemeral=True
+                )
                 return
             
+            # Check if user is creator
             if interaction.user.id != trade['creator_id']:
-                embed = discord.Embed(
-                    description="Only the trade creator can release BST!",
-                    color=0xED4245
+                await interaction.response.send_message(
+                    "❌ Only the trade creator can release BST!",
+                    ephemeral=True
                 )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
             
+            # Check if there's BST in escrow
             if trade['escrow_amount'] <= 0:
-                embed = discord.Embed(
-                    description="No BST in escrow!",
-                    color=0xED4245
+                await interaction.response.send_message(
+                    "❌ No BST in escrow!",
+                    ephemeral=True
                 )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
             
+            # Check if partner exists
             if not trade['partner_id']:
-                embed = discord.Embed(
-                    description="Add a trading partner first!",
-                    color=0xED4245
+                await interaction.response.send_message(
+                    "❌ Add a trading partner first!",
+                    ephemeral=True
                 )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
             
-            view = ConfirmRelease(trade)
+            # Confirmation modal
+            view = ConfirmReleaseView(trade)
+            
             embed = discord.Embed(
-                title="Confirm BST Release",
-                description=f"Release **{trade['escrow_amount']:.2f} BST** to <@{trade['partner_id']}>?",
-                color=0xFEE75C
+                title="⚠️ Confirm BST Release",
+                description=f"Are you sure you want to release **{trade['escrow_amount']:.2f} BST** to <@{trade['partner_id']}>?",
+                color=discord.Color.orange()
             )
             
             embed.add_field(
-                name="Warning",
-                value="This action cannot be undone! Only confirm if you received the Roblox items.",
+                name="⚠️ Warning",
+                value="**This action cannot be undone!**\n\nOnly confirm if you have received the Roblox items.",
                 inline=False
             )
             
             await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
             
         except Exception as e:
-            await interaction.response.send_message(f"Error: {str(e)}", ephemeral=True)
+            await interaction.response.send_message(
+                f"❌ Error: {str(e)}",
+                ephemeral=True
+            )
     
     @discord.ui.button(
         label="Close Ticket",
         style=discord.ButtonStyle.secondary,
-        custom_id="close_trade_ticket"
+        custom_id="close_ticket_button",
+        emoji="🔒"
     )
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Close the trade ticket"""
         try:
+            # Get trade info
             trade = await interaction.client.db.get_trade_by_channel(interaction.channel.id)
             
+            # Check if user is creator or admin
             is_creator = trade and interaction.user.id == trade['creator_id']
             is_admin = interaction.user.guild_permissions.administrator
             
             if not (is_creator or is_admin):
-                embed = discord.Embed(
-                    description="Only the creator or admins can close this ticket!",
-                    color=0xED4245
+                await interaction.response.send_message(
+                    "❌ Only the trade creator or admins can close this ticket!",
+                    ephemeral=True
                 )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
             
-            # Check escrow
+            # Check if there's BST in escrow
             if trade and trade['escrow_amount'] > 0:
-                view = CloseOptions()
+                view = ForceCloseView()
+                
                 embed = discord.Embed(
-                    title="BST in Escrow",
+                    title="⚠️ BST in Escrow!",
                     description=f"There is **{trade['escrow_amount']:.2f} BST** in escrow!",
-                    color=0xFEE75C
+                    color=discord.Color.red()
                 )
+                
                 embed.add_field(
                     name="Options",
-                    value="• **Refund BST** — Return BST to sender\n• **Force Close** — Close without refund (Admin only)",
+                    value="**Refund BST** - Return BST to sender\n**Force Close** - Close without refund (Admin only)",
                     inline=False
                 )
+                
                 await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
                 return
             
             # Close ticket
             embed = discord.Embed(
-                description="Closing ticket in 5 seconds...",
-                color=0xED4245
+                title="🔒 Closing Ticket",
+                description="This channel will be deleted in 5 seconds...",
+                color=discord.Color.red()
             )
+            
             await interaction.response.send_message(embed=embed)
             
             import asyncio
             await asyncio.sleep(5)
-            await interaction.channel.delete(reason="Trade ticket closed")
+            await interaction.channel.delete()
             
         except Exception as e:
-            await interaction.response.send_message(f"Error: {str(e)}", ephemeral=True)
+            await interaction.response.send_message(
+                f"❌ Error: {str(e)}",
+                ephemeral=True
+            )
 
-class PartnerModal(discord.ui.Modal, title="Add Trading Partner"):
-    user_id = discord.ui.TextInput(
+class AddPartnerModal(discord.ui.Modal, title="Add Trading Partner"):
+    partner_id = discord.ui.TextInput(
         label="Partner's User ID",
         placeholder="123456789012345678",
         required=True,
@@ -267,26 +282,25 @@ class PartnerModal(discord.ui.Modal, title="Add Trading Partner"):
     
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            partner_id = int(self.user_id.value)
-            partner = interaction.guild.get_member(partner_id)
+            partner_id = int(self.partner_id.value)
             
+            # Get user
+            partner = interaction.guild.get_member(partner_id)
             if not partner:
-                embed = discord.Embed(
-                    description="User not found in this server!",
-                    color=0xED4245
+                await interaction.response.send_message(
+                    "❌ User not found in this server!",
+                    ephemeral=True
                 )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
             
-            # Add permissions
+            # Add to channel
             await interaction.channel.set_permissions(
                 partner,
                 read_messages=True,
-                send_messages=True,
-                attach_files=True
+                send_messages=True
             )
             
-            # Update database
+            # Update trade
             trade = await interaction.client.db.get_trade_by_channel(interaction.channel.id)
             if trade:
                 await interaction.client.db.update_trade(
@@ -296,22 +310,25 @@ class PartnerModal(discord.ui.Modal, title="Add Trading Partner"):
                 )
             
             embed = discord.Embed(
-                title="Partner Added",
-                description=f"{partner.mention} has been added to this trade!",
-                color=0x57F287
+                title="✅ Partner Added",
+                description=f"{partner.mention} has been added to the trade!",
+                color=discord.Color.green()
             )
+            
             await interaction.response.send_message(embed=embed)
             
         except ValueError:
-            embed = discord.Embed(
-                description="Invalid User ID format!",
-                color=0xED4245
+            await interaction.response.send_message(
+                "❌ Invalid User ID!",
+                ephemeral=True
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
         except Exception as e:
-            await interaction.response.send_message(f"Error: {str(e)}", ephemeral=True)
+            await interaction.response.send_message(
+                f"❌ Error: {str(e)}",
+                ephemeral=True
+            )
 
-class EscrowModal(discord.ui.Modal, title="Add BST to Escrow"):
+class AddEscrowModal(discord.ui.Modal, title="Add BST to Escrow"):
     amount = discord.ui.TextInput(
         label="BST Amount",
         placeholder="1.50",
@@ -324,32 +341,30 @@ class EscrowModal(discord.ui.Modal, title="Add BST to Escrow"):
             amount = float(self.amount.value)
             
             if amount <= 0:
-                embed = discord.Embed(
-                    description="Amount must be positive!",
-                    color=0xED4245
+                await interaction.response.send_message(
+                    "❌ Amount must be positive!",
+                    ephemeral=True
                 )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
             
+            # Check balance
             balance = await interaction.client.db.get_balance(interaction.user.id)
             
             if balance < amount:
-                embed = discord.Embed(
-                    description=f"Insufficient BST! You have **{balance:.2f} BST**",
-                    color=0xED4245
+                await interaction.response.send_message(
+                    f"❌ Insufficient BST! You have **{balance:.2f} BST**",
+                    ephemeral=True
                 )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
             
-            # Remove BST
+            # Remove BST from user
             success = await interaction.client.db.remove_bst(interaction.user.id, amount)
             
             if not success:
-                embed = discord.Embed(
-                    description="Failed to add BST to escrow!",
-                    color=0xED4245
+                await interaction.response.send_message(
+                    "❌ Failed to add BST to escrow!",
+                    ephemeral=True
                 )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
             
             # Update trade
@@ -361,23 +376,24 @@ class EscrowModal(discord.ui.Modal, title="Add BST to Escrow"):
                     escrow_amount=new_escrow
                 )
             
+            # Get new balance
             new_balance = await interaction.client.db.get_balance(interaction.user.id)
             
             embed = discord.Embed(
-                title="BST Added to Escrow",
-                description=f"**{amount:.2f} BST** is now securely held in escrow",
-                color=0x57F287
+                title="✅ BST Added to Escrow",
+                description=f"**{amount:.2f} BST** is now held securely in escrow!",
+                color=discord.Color.green()
             )
             
             embed.add_field(
-                name="Your New Balance",
-                value=f"{new_balance:.2f} BST",
+                name="💰 Your New Balance",
+                value=f"**{new_balance:.2f} BST**",
                 inline=True
             )
             
             embed.add_field(
-                name="Total in Escrow",
-                value=f"{new_escrow:.2f} BST",
+                name="🛡️ Total in Escrow",
+                value=f"**{new_escrow:.2f} BST**",
                 inline=True
             )
             
@@ -386,23 +402,25 @@ class EscrowModal(discord.ui.Modal, title="Add BST to Escrow"):
             await interaction.response.send_message(embed=embed)
             
         except ValueError:
-            embed = discord.Embed(
-                description="Invalid amount format!",
-                color=0xED4245
+            await interaction.response.send_message(
+                "❌ Invalid amount!",
+                ephemeral=True
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
         except Exception as e:
-            await interaction.response.send_message(f"Error: {str(e)}", ephemeral=True)
+            await interaction.response.send_message(
+                f"❌ Error: {str(e)}",
+                ephemeral=True
+            )
 
-class ConfirmRelease(discord.ui.View):
+class ConfirmReleaseView(discord.ui.View):
     def __init__(self, trade):
         super().__init__(timeout=60)
         self.trade = trade
     
-    @discord.ui.button(label="Confirm Release", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="Confirm Release", style=discord.ButtonStyle.success, emoji="✅")
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            # Transfer BST
+            # Transfer BST to partner
             await interaction.client.db.add_bst(self.trade['partner_id'], self.trade['escrow_amount'])
             
             # Update trade
@@ -412,131 +430,195 @@ class ConfirmRelease(discord.ui.View):
             )
             await interaction.client.db.complete_trade(self.trade['trade_id'])
             
+            # Send confirmation
             partner = interaction.guild.get_member(self.trade['partner_id'])
             
             embed = discord.Embed(
-                title="BST Released",
-                description=f"**{self.trade['escrow_amount']:.2f} BST** sent to {partner.mention}!",
-                color=0x57F287
+                title="✅ BST Released!",
+                description=f"**{self.trade['escrow_amount']:.2f} BST** has been sent to {partner.mention}!",
+                color=discord.Color.green()
             )
             
             embed.add_field(
-                name="Trade Complete",
-                value="Thank you for using secure trading!\n\nTicket closing in 10 seconds...",
+                name="🎉 Trade Complete",
+                value="Thank you for using Secure Trading!\n\nThis ticket will close in 10 seconds.",
                 inline=False
             )
             
             await interaction.response.edit_message(embed=embed, view=None)
             await interaction.channel.send(embed=embed)
             
+            # Auto-close
             import asyncio
             await asyncio.sleep(10)
-            await interaction.channel.delete(reason="Trade completed")
+            await interaction.channel.delete()
             
         except Exception as e:
-            await interaction.response.send_message(f"Error: {str(e)}", ephemeral=True)
+            await interaction.response.send_message(
+                f"❌ Error: {str(e)}",
+                ephemeral=True
+            )
     
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = discord.Embed(
-            description="Release cancelled.",
-            color=0xED4245
-        )
-        await interaction.response.edit_message(embed=embed, view=None)
+        await interaction.response.edit_message(content="❌ Release cancelled.", embed=None, view=None)
 
-class CloseOptions(discord.ui.View):
+class ForceCloseView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=60)
     
-    @discord.ui.button(label="Refund BST", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="Refund BST", style=discord.ButtonStyle.success, emoji="💰")
     async def refund(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             trade = await interaction.client.db.get_trade_by_channel(interaction.channel.id)
             
-            # Refund
+            # Refund BST
             await interaction.client.db.add_bst(trade['creator_id'], trade['escrow_amount'])
+            
+            # Update trade
             await interaction.client.db.update_trade(trade['trade_id'], escrow_amount=0.0)
             
             embed = discord.Embed(
-                title="BST Refunded",
+                title="💰 BST Refunded",
                 description=f"**{trade['escrow_amount']:.2f} BST** has been refunded!",
-                color=0x57F287
+                color=discord.Color.green()
             )
             
             await interaction.response.edit_message(embed=embed, view=None)
             
+            # Close ticket
             import asyncio
             await asyncio.sleep(5)
-            await interaction.channel.delete(reason="Refunded and closed")
+            await interaction.channel.delete()
             
         except Exception as e:
-            await interaction.response.send_message(f"Error: {str(e)}", ephemeral=True)
+            await interaction.response.send_message(
+                f"❌ Error: {str(e)}",
+                ephemeral=True
+            )
     
-    @discord.ui.button(label="Force Close (Admin)", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="Force Close (Admin)", style=discord.ButtonStyle.danger, emoji="⚠️")
     async def force_close(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Admin only!", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Admin only!",
+                ephemeral=True
+            )
             return
         
-        embed = discord.Embed(
-            description="Force closing ticket...",
-            color=0xED4245
-        )
-        await interaction.response.edit_message(embed=embed, view=None)
+        await interaction.response.edit_message(content="🔒 Closing...", embed=None, view=None)
         
         import asyncio
         await asyncio.sleep(2)
-        await interaction.channel.delete(reason="Force closed by admin")
+        await interaction.channel.delete()
 
 class Trading(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.cleanup_inactive.start()
+
+    def cog_unload(self):
+        self.cleanup_inactive.cancel()
 
     @commands.Cog.listener()
     async def on_ready(self):
+        """Register persistent views"""
         self.bot.add_view(TradingPanel())
-        self.bot.add_view(TradeControls())
+        self.bot.add_view(AddPartnerView())
+        self.bot.add_view(RoleSelectionView())
+        self.bot.add_view(ConfirmRolesView())
+        self.bot.add_view(AmountInputView())
+        self.bot.add_view(ConfirmAmountView())
+        self.bot.add_view(ReleaseView())
 
-    @app_commands.command(name="tradepanel", description="Setup the trading panel")
+    @app_commands.command(name="tradepanel", description="Setup trading panel (Admin)")
     @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
     async def tradepanel(self, interaction: discord.Interaction):
+        """Setup trading panel"""
         if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permission required.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ You need Administrator permissions!",
+                ephemeral=True
+            )
             return
         
         embed = discord.Embed(
-            title="Secure BST Trading",
-            description="Trade BST safely with our secure escrow system!",
-            color=0x57F287
-        )
-        
-        embed.add_field(
-            name="How It Works",
-            value=(
-                "**1.** Click 'Create Trade Ticket' below\n"
-                "**2.** Private ticket channel is created\n"
-                "**3.** Invite your trading partner\n"
-                "**4.** Add BST to secure escrow\n"
-                "**5.** Complete trade and release BST"
+            title="💱 BST CURRENCY MIDDLEMAN",
+            description=(
+                "Welcome to our automated BST currency middleman!\n\n"
+                "Your currency will be held by our bot during this deal for a secured trade!\n\n"
+                "**How It Works:**\n"
+                "1️⃣ Click 'Create Trade Ticket'\n"
+                "2️⃣ Add your trading partner\n"
+                "3️⃣ Select roles (Sender/Receiver)\n"
+                "4️⃣ Set BST amount\n"
+                "5️⃣ Bot holds BST in escrow\n"
+                "6️⃣ Complete external trade\n"
+                "7️⃣ Sender releases BST\n\n"
+                "**⚠️ Please notify support in case of any emergency or assistance.**"
             ),
-            inline=False
+            color=0x5865F2
         )
         
-        embed.add_field(
-            name="Security Features",
-            value=(
-                "• BST held in secure escrow\n"
-                "• Admin monitoring and oversight\n"
-                "• Refund protection available\n"
-                "• Activity tracking system"
-            ),
-            inline=False
-        )
-        
-        embed.set_footer(text="Only trade with trusted partners!")
+        embed.set_footer(text="Trade safely with automated escrow protection!")
         
         await interaction.channel.send(embed=embed, view=TradingPanel())
-        await interaction.response.send_message("Trading panel created successfully!", ephemeral=True)
+        
+        await interaction.response.send_message(
+            "✅ Trading panel created!",
+            ephemeral=True
+        )
+
+    @tasks.loop(minutes=5)
+    async def cleanup_inactive(self):
+        """Close inactive trade tickets after 30 minutes"""
+        try:
+            inactive_trades = await self.bot.db.get_inactive_trades(30)
+            
+            for trade in inactive_trades:
+                try:
+                    channel = self.bot.get_channel(trade['channel_id'])
+                    if not channel:
+                        continue
+                    
+                    # Refund if BST held
+                    if trade['escrow_amount'] > 0:
+                        await self.bot.db.cancel_trade(trade['trade_id'], refund=True)
+                        
+                        sender = self.bot.get_user(trade['sender_id'])
+                        
+                        embed = discord.Embed(
+                            title="⏰ Trade Ticket Auto-Closed",
+                            description=(
+                                "This ticket has been inactive for 30 minutes.\n\n"
+                                f"**{trade['escrow_amount']:.2f} BST** has been refunded to {sender.mention if sender else 'sender'}.\n\n"
+                                "Closing in 10 seconds..."
+                            ),
+                            color=0xFEE75C
+                        )
+                        await channel.send(embed=embed)
+                    else:
+                        await self.bot.db.cancel_trade(trade['trade_id'], refund=False)
+                        
+                        embed = discord.Embed(
+                            description="⏰ This ticket has been inactive for 30 minutes and will now close.",
+                            color=0xFEE75C
+                        )
+                        await channel.send(embed=embed)
+                    
+                    import asyncio
+                    await asyncio.sleep(10)
+                    await channel.delete(reason="Inactive for 30 minutes")
+                    
+                except Exception as e:
+                    print(f"Error closing inactive trade {trade['trade_id']}: {e}")
+                    
+        except Exception as e:
+            print(f"Error in cleanup_inactive: {e}")
+
+    @cleanup_inactive.before_loop
+    async def before_cleanup(self):
+        await self.bot.wait_until_ready()
 
 async def setup(bot):
     await bot.add_cog(Trading(bot))
