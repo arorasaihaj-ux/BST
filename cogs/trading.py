@@ -29,14 +29,27 @@ class TradingPanel(discord.ui.View):
                 )
                 return
             
-            # Check existing ticket
-            for channel in category.text_channels:
-                if str(interaction.user.id) in channel.name:
-                    await interaction.response.send_message(
-                        f"❌ You already have an active ticket: {channel.mention}",
-                        ephemeral=True
-                    )
-                    return
+            # FIXED: Check database for active trades instead of channel names
+            # This prevents issues with deleted channels
+            existing_trades = await interaction.client.db.get_user_active_trades(interaction.user.id)
+            
+            if existing_trades:
+                # User has an active trade, check if channel still exists
+                channel_still_exists = False
+                for trade in existing_trades:
+                    channel = guild.get_channel(trade['channel_id'])
+                    if channel:
+                        channel_still_exists = True
+                        await interaction.response.send_message(
+                            f"❌ You already have an active ticket: {channel.mention}",
+                            ephemeral=True
+                        )
+                        return
+                
+                # If channel doesn't exist, cancel old trades
+                if not channel_still_exists:
+                    for trade in existing_trades:
+                        await interaction.client.db.cancel_trade(trade['trade_id'], refund=True)
             
             # Create permissions
             overwrites = {
@@ -92,7 +105,7 @@ class TradingPanel(discord.ui.View):
             
             # Step 1: Add partner
             step1_embed = discord.Embed(
-                title="📝 Step 1: Add Trading Partner",
+                title="🔒 Step 1: Add Trading Partner",
                 description=(
                     "Please click the button below and **paste the User ID** of the person you want to trade with.\n\n"
                     "**How to get User ID:**\n"
@@ -652,7 +665,7 @@ class ReleaseView(discord.ui.View):
     )
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message(
-            "Trade still in progress. Click 'Close Ticket' below to close with refund.",
+            "Trade still in progress. Contact an admin if you need to cancel.",
             ephemeral=True
         )
 
@@ -728,7 +741,7 @@ class Trading(commands.Cog):
                 try:
                     channel = self.bot.get_channel(trade['channel_id'])
                     if not channel:
-                        await self.bot.db.cancel_trade(trade['trade_id'], refund=False)
+                        await self.bot.db.cancel_trade(trade['trade_id'], refund=True)
                         continue
                     
                     # Check if BST is held
