@@ -1,6 +1,7 @@
 import asyncpg
 import os
-from typing import Optional, Dict, Any, List
+import uuid
+from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime, timedelta
 
 class Database:
@@ -49,7 +50,7 @@ class Database:
                 ON CONFLICT (user_id) DO UPDATE SET user_id = users.user_id
                 RETURNING *
             """, user_id)
-            return dict(user)
+            return dict(user) if user else None
 
     async def get_balance(self, user_id: int) -> float:
         """Get user BST balance"""
@@ -128,7 +129,7 @@ class Database:
                     message_count = users.message_count + 1
                 RETURNING message_count
             """, user_id)
-            return result['message_count']
+            return result['message_count'] if result else 0
 
     async def reset_messages(self, user_id: int) -> bool:
         """Reset message count to 0"""
@@ -169,7 +170,7 @@ class Database:
                     updated_at = NOW()
                 RETURNING pool_amount
             """, amount)
-            return float(result['pool_amount'])
+            return float(result['pool_amount']) if result else 0.0
 
     async def remove_from_pool(self, amount: float) -> Optional[float]:
         """Remove BST from pool (with check)"""
@@ -192,14 +193,6 @@ class Database:
                 WHERE pool_id = 1
             """)
             return True
-
-    async def get_available_pool_for_managers(self) -> float:
-        """Get available BST that managers can distribute (Pool - already distributed)"""
-        async with self.pool.acquire() as conn:
-            pool = await conn.fetchval(
-                "SELECT COALESCE(pool_amount, 0) FROM economy_pool WHERE pool_id = 1"
-            )
-            return float(pool) if pool else 0.0
 
     # ==================== WEEKLY CAP ====================
     
@@ -235,6 +228,8 @@ class Database:
     async def get_weekly_remaining(self) -> float:
         """Get remaining BST available this week"""
         weekly_cap = await self.get_weekly_cap()
+        if not weekly_cap:
+            return 10.0
         return max(0, weekly_cap['total_cap'] - weekly_cap['bst_distributed'])
 
     async def reset_weekly_cap(self) -> bool:
@@ -304,67 +299,15 @@ class Database:
             """, sender_id, receiver_id, trade_id)
             return True
 
-    async def confirm_role(self, trade_id: str, user_id: int, is_sender: bool) -> Dict[str, bool]:
-        """Confirm role selection"""
-        async with self.pool.acquire() as conn:
-            if is_sender:
-                await conn.execute("""
-                    UPDATE trades SET sender_confirmed = true, last_activity = NOW()
-                    WHERE trade_id = $1
-                """, trade_id)
-            else:
-                await conn.execute("""
-                    UPDATE trades SET receiver_confirmed = true, last_activity = NOW()
-                    WHERE trade_id = $1
-                """, trade_id)
-            
-            row = await conn.fetchrow("""
-                SELECT sender_confirmed, receiver_confirmed 
-                FROM trades WHERE trade_id = $1
-            """, trade_id)
-            
-            return {
-                'sender_confirmed': row['sender_confirmed'],
-                'receiver_confirmed': row['receiver_confirmed']
-            }
-
-    async def set_trade_amount(self, trade_id: str, amount: float) -> bool:
-        """Set BST amount for trade"""
+    async def update_trade_stage(self, trade_id: str, stage: str) -> bool:
+        """Update trade stage"""
         async with self.pool.acquire() as conn:
             await conn.execute("""
                 UPDATE trades 
-                SET bst_amount = $1, 
-                    stage = 'amount_set',
-                    sender_confirmed = false,
-                    receiver_confirmed = false,
-                    last_activity = NOW()
+                SET stage = $1, last_activity = NOW()
                 WHERE trade_id = $2
-            """, amount, trade_id)
+            """, stage, trade_id)
             return True
-
-    async def confirm_amount(self, trade_id: str, user_id: int, is_sender: bool) -> Dict[str, bool]:
-        """Confirm trade amount"""
-        async with self.pool.acquire() as conn:
-            if is_sender:
-                await conn.execute("""
-                    UPDATE trades SET sender_confirmed = true, last_activity = NOW()
-                    WHERE trade_id = $1
-                """, trade_id)
-            else:
-                await conn.execute("""
-                    UPDATE trades SET receiver_confirmed = true, last_activity = NOW()
-                    WHERE trade_id = $1
-                """, trade_id)
-            
-            row = await conn.fetchrow("""
-                SELECT sender_confirmed, receiver_confirmed 
-                FROM trades WHERE trade_id = $1
-            """, trade_id)
-            
-            return {
-                'sender_confirmed': row['sender_confirmed'],
-                'receiver_confirmed': row['receiver_confirmed']
-            }
 
     async def hold_bst_in_escrow(self, trade_id: str, sender_id: int, amount: float) -> bool:
         """Hold BST from sender (remove from their balance)"""
@@ -389,12 +332,14 @@ class Database:
                 if "UPDATE 0" in result:
                     return False
                 
-                # Update trade stage
+                # Update trade stage and set escrow amount
                 await conn.execute("""
                     UPDATE trades 
-                    SET stage = 'bst_held', last_activity = NOW()
-                    WHERE trade_id = $1
-                """, trade_id)
+                    SET stage = 'bst_held', 
+                        escrow_amount = $1,
+                        last_activity = NOW()
+                    WHERE trade_id = $2
+                """, amount, trade_id)
                 
                 return True
 
@@ -427,17 +372,17 @@ class Database:
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 trade = await conn.fetchrow("""
-                    SELECT sender_id, bst_amount, stage 
+                    SELECT sender_id, escrow_amount, stage 
                     FROM trades WHERE trade_id = $1
                 """, trade_id)
                 
-                if refund and trade and trade['stage'] == 'bst_held' and trade['bst_amount'] > 0:
+                if refund and trade and trade['stage'] == 'bst_held' and trade['escrow_amount'] > 0:
                     # Refund to sender
                     await conn.execute("""
                         UPDATE users 
                         SET bst_balance = bst_balance + $1
                         WHERE user_id = $2
-                    """, trade['bst_amount'], trade['sender_id'])
+                    """, trade['escrow_amount'], trade['sender_id'])
                 
                 # Mark as cancelled
                 await conn.execute("""
@@ -478,7 +423,7 @@ class Database:
             """, user_id)
             return [dict(row) for row in rows]
 
-    # ==================== BOXES ====================
+    # ==================== BOXES & INVENTORY ====================
     
     async def add_box(self, user_id: int, box_type: str) -> str:
         """Add box to user inventory"""
@@ -523,8 +468,6 @@ class Database:
                 
                 return True
 
-    # ==================== INVENTORY ====================
-    
     async def get_inventory(self, user_id: int) -> Dict[str, Any]:
         """Get user's full inventory"""
         async with self.pool.acquire() as conn:
