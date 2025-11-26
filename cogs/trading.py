@@ -23,7 +23,7 @@ class TradingPanel(discord.ui.View):
             
             if not category:
                 await interaction.response.send_message(
-                    "❌ Trading system not configured!",
+                    "❌ Trading system not configured! Please contact admin.",
                     ephemeral=True
                 )
                 return
@@ -36,7 +36,7 @@ class TradingPanel(discord.ui.View):
                     channel = guild.get_channel(trade['channel_id'])
                     if channel:
                         await interaction.response.send_message(
-                            f"❌ You already have an active ticket: {channel.mention}",
+                            f"❌ You already have an active trade ticket: {channel.mention}",
                             ephemeral=True
                         )
                         return
@@ -67,11 +67,12 @@ class TradingPanel(discord.ui.View):
                 if role.permissions.administrator:
                     overwrites[role] = discord.PermissionOverwrite(
                         read_messages=True,
-                        send_messages=True
+                        send_messages=True,
+                        manage_messages=True
                     )
             
             channel = await category.create_text_channel(
-                name=f"trade-{interaction.user.name}",
+                name=f"trade-{interaction.user.display_name}",
                 overwrites=overwrites
             )
             
@@ -96,7 +97,7 @@ class TradingPanel(discord.ui.View):
             await channel.send(content=interaction.user.mention, embed=welcome_embed)
             
             # STEP 2: Instructions to add partner
-            await asyncio.sleep(1)
+            await asyncio.sleep(2)
             
             partner_embed = discord.Embed(
                 title="👥 Step 1: Add Trading Partner",
@@ -188,7 +189,7 @@ class AddPartnerModal(discord.ui.Modal, title="Add Trading Partner"):
             await interaction.response.send_message(embed=confirm_embed)
             
             # STEP 3: Role selection
-            await asyncio.sleep(1)
+            await asyncio.sleep(2)
             
             role_embed = discord.Embed(
                 title="📋 Step 2: Role Assignment",
@@ -208,7 +209,7 @@ class AddPartnerModal(discord.ui.Modal, title="Add Trading Partner"):
             
         except ValueError:
             await interaction.response.send_message(
-                "❌ Invalid User ID format!",
+                "❌ Invalid User ID format! Please enter numbers only.",
                 ephemeral=True
             )
         except Exception as e:
@@ -345,7 +346,7 @@ class ConfirmRolesView(discord.ui.View):
         
         # Both confirmed
         if len(self.confirmed_users) == 2:
-            await asyncio.sleep(1)
+            await asyncio.sleep(2)
             
             amount_embed = discord.Embed(
                 title="💵 Step 3: BST Amount",
@@ -433,7 +434,6 @@ class AmountModal(discord.ui.Modal, title="Enter BST Amount"):
             # Update trade
             trade = await interaction.client.db.get_trade_by_channel(interaction.channel.id)
             if trade:
-                await interaction.client.db.set_trade_amount(trade['trade_id'], amount)
                 await interaction.client.db.update_trade_stage(trade['trade_id'], 'amount_set')
             
             amount_display = discord.Embed(
@@ -444,7 +444,7 @@ class AmountModal(discord.ui.Modal, title="Enter BST Amount"):
             
             await interaction.response.send_message(embed=amount_display)
             
-            await asyncio.sleep(1)
+            await asyncio.sleep(2)
             
             confirm_amount_embed = discord.Embed(
                 title="✅ Confirm Amount",
@@ -461,7 +461,7 @@ class AmountModal(discord.ui.Modal, title="Enter BST Amount"):
             
         except ValueError:
             await interaction.response.send_message(
-                "❌ Invalid amount format!",
+                "❌ Invalid amount format! Please enter numbers only (e.g., 1.50)",
                 ephemeral=True
             )
         except Exception as e:
@@ -526,7 +526,7 @@ class ConfirmAmountView(discord.ui.View):
                 await interaction.channel.send("❌ Failed to hold BST! Insufficient balance.")
                 return
             
-            await asyncio.sleep(1)
+            await asyncio.sleep(2)
             
             held_embed = discord.Embed(
                 title="🛡️ BST Secured in Escrow",
@@ -715,14 +715,14 @@ class Trading(commands.Cog):
                         await self.bot.db.cancel_trade(trade['trade_id'], refund=True)
                         continue
                     
-                    if trade['stage'] == 'bst_held' and trade['bst_amount'] > 0:
+                    if trade['stage'] == 'bst_held' and trade['escrow_amount'] > 0:
                         await self.bot.db.cancel_trade(trade['trade_id'], refund=True)
                         
                         embed = discord.Embed(
                             title="⏰ Ticket Auto-Closed - BST Refunded",
                             description=(
                                 f"Inactive for 30 minutes.\n\n"
-                                f"**{trade['bst_amount']:.2f} BST** refunded to <@{trade['sender_id']}>.\n\n"
+                                f"**{trade['escrow_amount']:.2f} BST** refunded to <@{trade['sender_id']}>.\n\n"
                                 "Closing in 10 seconds..."
                             ),
                             color=0xFEE75C
