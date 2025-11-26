@@ -23,9 +23,13 @@ class CleanEconomyBot(commands.Bot):
         self.db = None
         self.initialized = False
         
-        # Role IDs from .env
+        # Role IDs from .env - FIXED TO HANDLE MULTIPLE ROLES
         self.owner_role_id = int(os.getenv('OWNER_ROLE_ID'))
-        self.manager_role_id = int(os.getenv('MANAGER_ROLE_ID'))
+        
+        # Parse multiple manager role IDs
+        manager_roles_str = os.getenv('MANAGER_ROLE_ID', '')
+        self.manager_role_ids = [int(role_id.strip()) for role_id in manager_roles_str.split(',') if role_id.strip()]
+        
         self.guild_id = int(os.getenv('GUILD_ID'))
 
     async def setup_hook(self):
@@ -97,3 +101,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
