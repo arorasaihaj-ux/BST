@@ -4,13 +4,13 @@ from discord import app_commands
 import random
 import os
 
-# Box configurations with CORRECT rewards (not points/BST as rewards)
+# Box configurations with FIXED RIGGED REWARDS
 BOX_CONFIG = {
     'base': {
         'name': 'Base Mystery Box',
         'cost': 1.0,
         'color': 0x5865F2,  # Discord Blurple
-        # What players see (DISPLAYED)
+        # What players see (DISPLAYED - unchanged)
         'display_drops': [
             ("Taco Block", "40%"),
             ("Los Lucky Block", "30%"),
@@ -31,7 +31,7 @@ BOX_CONFIG = {
         'name': 'Gold Mystery Box',
         'cost': 2.5,
         'color': 0xFEE75C,  # Gold
-        # What players see (DISPLAYED)
+        # What players see (DISPLAYED - unchanged)
         'display_drops': [
             ("3x Los Lucky Block", "40%"),
             ("80 Robux", "25%"),
@@ -40,14 +40,14 @@ BOX_CONFIG = {
             ("La Grande Combi", "3.5%"),
             ("400 Robux", "1%")
         ],
-        # Actual rigged odds
+        # UPDATED RIGGED ODDS - AS REQUESTED
         'actual_drops': [
-            ("3x Los Lucky Block", 50.0),
-            ("Miet Bike", 30.0),
-            ("80 Robux", 15.0),
-            ("La Combination", 3.0),
-            ("La Grande Combi", 1.0),
-            ("400 Robux", 1.0)
+            ("3x Los Lucky Block", 50.0),  # 50%
+            ("80 Robux", 40.0),             # 40%
+            ("Miet Bike", 5.0),             # 5%
+            ("La Combination", 3.0),        # 3%
+            ("La Grande Combi", 1.0),       # 1%
+            ("400 Robux", 1.0)              # 1%
         ]
     }
 }
@@ -229,7 +229,7 @@ class BoxSelectionView(discord.ui.View):
         
         # Result embed
         embed = discord.Embed(
-            title="Congratulations!",
+            title="🎉 Congratulations!",
             description=f"You won **{item_won}**",
             color=0x57F287
         )
@@ -266,7 +266,7 @@ class Boxes(commands.Cog):
             return
         
         embed = discord.Embed(
-            title="Mystery Box Shop",
+            title="🎁 Mystery Box Shop",
             description="Purchase mystery boxes with BST and win exclusive items!",
             color=0x5865F2
         )
@@ -283,7 +283,7 @@ class Boxes(commands.Cog):
         embed.set_footer(text="Use the buttons below to purchase and open boxes")
         
         await interaction.channel.send(embed=embed, view=PremiumBoxView())
-        await interaction.response.send_message("Box panel created successfully!", ephemeral=True)
+        await interaction.response.send_message("✅ Box panel created successfully!", ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(Boxes(bot))
