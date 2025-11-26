@@ -255,9 +255,9 @@ class Database:
             trade_id = await conn.fetchval("""
                 INSERT INTO trades (
                     channel_id, creator_id, status, stage, 
-                    bst_amount, sender_confirmed, receiver_confirmed
+                    bst_amount, escrow_amount, sender_confirmed, receiver_confirmed
                 )
-                VALUES ($1, $2, 'active', 'awaiting_partner', 0.0, false, false)
+                VALUES ($1, $2, 'active', 'awaiting_partner', 0.0, 0.0, false, false)
                 RETURNING trade_id
             """, channel_id, creator_id)
             return str(trade_id)
@@ -292,21 +292,9 @@ class Database:
                 UPDATE trades 
                 SET sender_id = $1, receiver_id = $2, 
                     stage = 'roles_set', 
-                    sender_confirmed = false,
-                    receiver_confirmed = false,
                     last_activity = NOW()
                 WHERE trade_id = $3
             """, sender_id, receiver_id, trade_id)
-            return True
-
-    async def set_trade_amount(self, trade_id: str, amount: float) -> bool:
-        """Set BST amount for trade"""
-        async with self.pool.acquire() as conn:
-            await conn.execute("""
-                UPDATE trades 
-                SET bst_amount = $1, last_activity = NOW()
-                WHERE trade_id = $2
-            """, amount, trade_id)
             return True
 
     async def update_trade_stage(self, trade_id: str, stage: str) -> bool:
@@ -317,6 +305,16 @@ class Database:
                 SET stage = $1, last_activity = NOW()
                 WHERE trade_id = $2
             """, stage, trade_id)
+            return True
+
+    async def set_trade_amount(self, trade_id: str, amount: float) -> bool:
+        """Set BST amount for trade"""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE trades 
+                SET bst_amount = $1, last_activity = NOW()
+                WHERE trade_id = $2
+            """, amount, trade_id)
             return True
 
     async def hold_bst_in_escrow(self, trade_id: str, sender_id: int, amount: float) -> bool:
@@ -365,12 +363,11 @@ class Database:
                         bst_balance = users.bst_balance + $2
                 """, receiver_id, amount)
                 
-                # Complete trade and reset escrow amount
+                # Complete trade
                 await conn.execute("""
                     UPDATE trades 
                     SET status = 'completed', 
                         stage = 'completed',
-                        escrow_amount = 0.00,
                         completed_at = NOW(),
                         last_activity = NOW()
                     WHERE trade_id = $1
@@ -395,12 +392,10 @@ class Database:
                         WHERE user_id = $2
                     """, trade['escrow_amount'], trade['sender_id'])
                 
-                # Mark as cancelled and reset escrow
+                # Mark as cancelled
                 await conn.execute("""
                     UPDATE trades 
-                    SET status = 'cancelled', 
-                        escrow_amount = 0.00,
-                        last_activity = NOW()
+                    SET status = 'cancelled', last_activity = NOW()
                     WHERE trade_id = $1
                 """, trade_id)
                 
@@ -436,7 +431,7 @@ class Database:
             """, user_id)
             return [dict(row) for row in rows]
 
-    # ==================== BOXES & INVENTORY ====================
+    # ==================== BOXES SYSTEM ====================
     
     async def add_box(self, user_id: int, box_type: str) -> str:
         """Add box to user inventory"""
@@ -481,6 +476,8 @@ class Database:
                 
                 return True
 
+    # ==================== INVENTORY SYSTEM ====================
+    
     async def get_inventory(self, user_id: int) -> Dict[str, Any]:
         """Get user's full inventory"""
         async with self.pool.acquire() as conn:
@@ -503,7 +500,7 @@ class Database:
                 'items': [dict(i) for i in items]
             }
 
-    # ==================== STATISTICS ====================
+    # ==================== STATISTICS & ADMIN ====================
     
     async def get_all_balances(self) -> List[tuple]:
         """Get all users with BST"""
@@ -536,3 +533,58 @@ class Database:
             return await conn.fetchval(
                 "SELECT COUNT(*) FROM boxes WHERE opened = true"
             )
+
+    async def get_economy_stats(self) -> Dict[str, Any]:
+        """Get comprehensive economy statistics"""
+        async with self.pool.acquire() as conn:
+            pool_balance = await self.get_pool_balance()
+            circulation = await self.get_total_bst_in_circulation()
+            user_count = await self.get_user_count()
+            boxes_opened = await self.get_total_boxes_opened()
+            weekly_remaining = await self.get_weekly_remaining()
+            
+            return {
+                'pool_balance': pool_balance,
+                'circulation': circulation,
+                'total_supply': pool_balance + circulation,
+                'user_count': user_count,
+                'boxes_opened': boxes_opened,
+                'weekly_remaining': weekly_remaining
+            }
+
+    async def reset_user(self, user_id: int) -> bool:
+        """Reset user's BST to 0"""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE users 
+                SET bst_balance = 0.0, message_count = 0
+                WHERE user_id = $1
+            """, user_id)
+            return True
+
+    async def get_top_users(self, limit: int = 10) -> List[Dict]:
+        """Get top users by BST balance"""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT user_id, bst_balance, message_count
+                FROM users 
+                WHERE bst_balance > 0
+                ORDER BY bst_balance DESC
+                LIMIT $1
+            """, limit)
+            return [dict(row) for row in rows]
+
+    async def get_trade_statistics(self) -> Dict[str, Any]:
+        """Get trading statistics"""
+        async with self.pool.acquire() as conn:
+            total_trades = await conn.fetchval("SELECT COUNT(*) FROM trades")
+            completed_trades = await conn.fetchval("SELECT COUNT(*) FROM trades WHERE status = 'completed'")
+            active_trades = await conn.fetchval("SELECT COUNT(*) FROM trades WHERE status = 'active'")
+            total_traded = await conn.fetchval("SELECT COALESCE(SUM(bst_amount), 0) FROM trades WHERE status = 'completed'")
+            
+            return {
+                'total_trades': total_trades,
+                'completed_trades': completed_trades,
+                'active_trades': active_trades,
+                'total_traded': float(total_traded) if total_traded else 0.0
+            }
