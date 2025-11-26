@@ -64,18 +64,40 @@ class Database:
             return float(result)
 
     async def add_bst(self, user_id: int, amount: float) -> bool:
-        """Add BST to user"""
+        """Add BST to user FROM POOL - REQUIRES POOL BALANCE"""
         async with self.pool.acquire() as conn:
-            await conn.execute("""
-                INSERT INTO users (user_id, bst_balance, message_count)
-                VALUES ($1, $2, 0)
-                ON CONFLICT (user_id) DO UPDATE SET
-                    bst_balance = users.bst_balance + $2
-            """, user_id, amount)
-            return True
+            async with conn.transaction():
+                # Check pool has enough
+                pool_balance = await conn.fetchval(
+                    "SELECT pool_amount FROM economy_pool WHERE pool_id = 1"
+                )
+                
+                if not pool_balance or pool_balance < amount:
+                    return False
+                
+                # Remove from pool first
+                result = await conn.execute("""
+                    UPDATE economy_pool
+                    SET pool_amount = pool_amount - $1,
+                        updated_at = NOW()
+                    WHERE pool_id = 1 AND pool_amount >= $1
+                """, amount)
+                
+                if "UPDATE 0" in result:
+                    return False
+                
+                # Add to user
+                await conn.execute("""
+                    INSERT INTO users (user_id, bst_balance, message_count)
+                    VALUES ($1, $2, 0)
+                    ON CONFLICT (user_id) DO UPDATE SET
+                        bst_balance = users.bst_balance + $2
+                """, user_id, amount)
+                
+                return True
 
     async def remove_bst(self, user_id: int, amount: float) -> bool:
-        """Remove BST from user (with balance check)"""
+        """Remove BST from user (with balance check) - BST IS DESTROYED"""
         async with self.pool.acquire() as conn:
             result = await conn.execute("""
                 UPDATE users 
@@ -85,7 +107,7 @@ class Database:
             return "UPDATE 1" in result
 
     async def set_bst(self, user_id: int, amount: float) -> bool:
-        """Set exact BST amount"""
+        """Set exact BST amount - ONLY OWNER CAN USE THIS"""
         async with self.pool.acquire() as conn:
             await conn.execute("""
                 INSERT INTO users (user_id, bst_balance, message_count)
@@ -137,7 +159,7 @@ class Database:
             return float(result) if result else 0.0
 
     async def add_to_pool(self, amount: float) -> float:
-        """Add BST to economy pool (minting)"""
+        """Add BST to economy pool (minting) - OWNER ONLY"""
         async with self.pool.acquire() as conn:
             result = await conn.fetchrow("""
                 INSERT INTO economy_pool (pool_id, pool_amount)
@@ -170,6 +192,14 @@ class Database:
                 WHERE pool_id = 1
             """)
             return True
+
+    async def get_available_pool_for_managers(self) -> float:
+        """Get available BST that managers can distribute (Pool - already distributed)"""
+        async with self.pool.acquire() as conn:
+            pool = await conn.fetchval(
+                "SELECT COALESCE(pool_amount, 0) FROM economy_pool WHERE pool_id = 1"
+            )
+            return float(pool) if pool else 0.0
 
     # ==================== WEEKLY CAP ====================
     
