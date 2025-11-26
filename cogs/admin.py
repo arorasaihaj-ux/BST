@@ -7,13 +7,18 @@ class Admin(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.owner_role_id = int(os.getenv('OWNER_ROLE_ID'))
-        self.manager_role_id = int(os.getenv('MANAGER_ROLE_ID'))
+        
+        # Parse multiple manager role IDs
+        manager_roles_str = os.getenv('MANAGER_ROLE_ID', '')
+        self.manager_role_ids = [int(role_id.strip()) for role_id in manager_roles_str.split(',') if role_id.strip()]
 
     def has_owner_role(self, interaction: discord.Interaction) -> bool:
+        """Check if user has owner role"""
         return any(role.id == self.owner_role_id for role in interaction.user.roles)
 
     def has_manager_role(self, interaction: discord.Interaction) -> bool:
-        return any(role.id == self.manager_role_id for role in interaction.user.roles)
+        """Check if user has any manager role"""
+        return any(role.id in self.manager_role_ids for role in interaction.user.roles)
 
     # ==================== OWNER COMMANDS ====================
 
