@@ -437,6 +437,17 @@ class Database:
             """, minutes)
             return [dict(row) for row in rows]
 
+    async def get_user_active_trades(self, user_id: int) -> List[Dict]:
+        """Get all active trades for a user (as creator or partner)"""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT * FROM trades
+                WHERE (creator_id = $1 OR partner_id = $1)
+                AND status IN ('active', 'pending')
+                ORDER BY created_at DESC
+            """, user_id)
+            return [dict(row) for row in rows]
+
     # ==================== BOXES ====================
     
     async def add_box(self, user_id: int, box_type: str) -> str:
