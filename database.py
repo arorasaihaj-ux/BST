@@ -117,6 +117,42 @@ class Database:
             """, user_id, amount)
             return True
 
+    async def reset_user_and_return_to_pool(self, user_id: int) -> bool:
+        """Reset user's BST to 0 and RETURN their balance to the pool"""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                # Get user's current balance
+                balance = await conn.fetchval(
+                    "SELECT bst_balance FROM users WHERE user_id = $1",
+                    user_id
+                )
+                
+                if not balance or balance == 0:
+                    # User has no BST, just reset
+                    await conn.execute("""
+                        UPDATE users 
+                        SET bst_balance = 0.0, message_count = 0
+                        WHERE user_id = $1
+                    """, user_id)
+                    return True
+                
+                # Return BST to pool
+                await conn.execute("""
+                    UPDATE economy_pool
+                    SET pool_amount = pool_amount + $1,
+                        updated_at = NOW()
+                    WHERE pool_id = 1
+                """, balance)
+                
+                # Reset user
+                await conn.execute("""
+                    UPDATE users 
+                    SET bst_balance = 0.0, message_count = 0
+                    WHERE user_id = $1
+                """, user_id)
+                
+                return True
+
     # ==================== MESSAGE TRACKING ====================
     
     async def increment_messages(self, user_id: int) -> int:
@@ -500,6 +536,46 @@ class Database:
                 'items': [dict(i) for i in items]
             }
 
+    async def remove_inventory_item(self, user_id: int, item_name: str, quantity: int) -> bool:
+        """Remove specific quantity of item from user's inventory"""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                # Check current quantity
+                current_qty = await conn.fetchval("""
+                    SELECT quantity FROM inventory
+                    WHERE user_id = $1 AND LOWER(item_name) = LOWER($2)
+                """, user_id, item_name)
+                
+                if not current_qty or current_qty < quantity:
+                    return False
+                
+                new_qty = current_qty - quantity
+                
+                if new_qty == 0:
+                    # Remove item completely
+                    await conn.execute("""
+                        DELETE FROM inventory
+                        WHERE user_id = $1 AND LOWER(item_name) = LOWER($2)
+                    """, user_id, item_name)
+                else:
+                    # Reduce quantity
+                    await conn.execute("""
+                        UPDATE inventory
+                        SET quantity = $3
+                        WHERE user_id = $1 AND LOWER(item_name) = LOWER($2)
+                    """, user_id, item_name, new_qty)
+                
+                return True
+
+    async def clear_inventory(self, user_id: int) -> bool:
+        """Clear ALL items from user's inventory"""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                DELETE FROM inventory
+                WHERE user_id = $1
+            """, user_id)
+            return True
+
     # ==================== STATISTICS & ADMIN ====================
     
     async def get_all_balances(self) -> List[tuple]:
@@ -553,7 +629,7 @@ class Database:
             }
 
     async def reset_user(self, user_id: int) -> bool:
-        """Reset user's BST to 0"""
+        """Reset user's BST to 0 (OLD VERSION - DESTROYS BST)"""
         async with self.pool.acquire() as conn:
             await conn.execute("""
                 UPDATE users 
