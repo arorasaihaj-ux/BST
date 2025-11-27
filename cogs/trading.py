@@ -17,12 +17,15 @@ class TradingPanel(discord.ui.View):
         custom_id="create_trade_ticket_main"
     )
     async def create_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # FIXED: Defer interaction immediately to prevent "interaction failed"
+        await interaction.response.defer(ephemeral=True)
+        
         try:
             guild = interaction.guild
             category = guild.get_channel(TICKET_CATEGORY_ID)
             
             if not category:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     "❌ Trading system not configured! Please contact admin.",
                     ephemeral=True
                 )
@@ -35,7 +38,7 @@ class TradingPanel(discord.ui.View):
                 for trade in existing_trades:
                     channel = guild.get_channel(trade['channel_id'])
                     if channel:
-                        await interaction.response.send_message(
+                        await interaction.followup.send(
                             f"❌ You already have an active trade ticket: {channel.mention}",
                             ephemeral=True
                         )
@@ -115,14 +118,15 @@ class TradingPanel(discord.ui.View):
             
             await channel.send(embed=partner_embed, view=AddPartnerView())
             
-            await interaction.response.send_message(
+            # FIXED: Use followup instead of response
+            await interaction.followup.send(
                 f"✅ Trade ticket created: {channel.mention}",
                 ephemeral=True
             )
             
         except Exception as e:
             print(f"Error creating ticket: {e}")
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"❌ Error creating ticket: {str(e)}",
                 ephemeral=True
             )
@@ -221,11 +225,12 @@ class AddPartnerModal(discord.ui.Modal, title="Add Trading Partner"):
 
 
 class RoleSelectionView(discord.ui.View):
-    """Role selection buttons"""
+    """FIXED: Role selection buttons - users can only pick ONE role each"""
     def __init__(self):
         super().__init__(timeout=None)
         self.sender_id = None
         self.receiver_id = None
+        self.user_selections = {}  # Track which user selected which role
     
     @discord.ui.button(
         label="💸 Sending BST",
@@ -233,14 +238,26 @@ class RoleSelectionView(discord.ui.View):
         custom_id="role_sender"
     )
     async def sender_role(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.sender_id:
+        user_id = interaction.user.id
+        
+        # FIXED: Check if user already selected a role
+        if user_id in self.user_selections:
             await interaction.response.send_message(
-                "❌ Sender role already taken!",
+                f"❌ You already selected **{self.user_selections[user_id]}** role! Use 🔄 Reset to change.",
                 ephemeral=True
             )
             return
         
-        self.sender_id = interaction.user.id
+        # Check if sender role is already taken
+        if self.sender_id:
+            await interaction.response.send_message(
+                "❌ Sender role already taken by another user!",
+                ephemeral=True
+            )
+            return
+        
+        self.sender_id = user_id
+        self.user_selections[user_id] = "Sending BST"
         
         await interaction.response.send_message(
             f"✅ {interaction.user.mention} selected **Sending BST** role"
@@ -255,14 +272,26 @@ class RoleSelectionView(discord.ui.View):
         custom_id="role_receiver"
     )
     async def receiver_role(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.receiver_id:
+        user_id = interaction.user.id
+        
+        # FIXED: Check if user already selected a role
+        if user_id in self.user_selections:
             await interaction.response.send_message(
-                "❌ Receiver role already taken!",
+                f"❌ You already selected **{self.user_selections[user_id]}** role! Use 🔄 Reset to change.",
                 ephemeral=True
             )
             return
         
-        self.receiver_id = interaction.user.id
+        # Check if receiver role is already taken
+        if self.receiver_id:
+            await interaction.response.send_message(
+                "❌ Receiver role already taken by another user!",
+                ephemeral=True
+            )
+            return
+        
+        self.receiver_id = user_id
+        self.user_selections[user_id] = "Receiving BST"
         
         await interaction.response.send_message(
             f"✅ {interaction.user.mention} selected **Receiving BST** role"
@@ -279,6 +308,7 @@ class RoleSelectionView(discord.ui.View):
     async def reset_roles(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.sender_id = None
         self.receiver_id = None
+        self.user_selections.clear()
         
         await interaction.response.send_message(
             "🔄 Roles reset. Please select again."
