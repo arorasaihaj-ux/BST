@@ -272,7 +272,7 @@ class Admin(commands.Cog):
         except Exception as e:
             await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
 
-    @app_commands.command(name="resetuser", description="Reset user's BST to 0 (Manager)")
+    @app_commands.command(name="resetuser", description="Reset user's BST to 0 and RETURN TO POOL (Manager)")
     @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
     async def resetuser(self, interaction: discord.Interaction, user: discord.Member):
         if not self.has_manager_role(interaction):
@@ -281,18 +281,188 @@ class Admin(commands.Cog):
 
         try:
             old_balance = await self.bot.db.get_balance(user.id)
-            await self.bot.db.set_bst(user.id, 0.0)
+            
+            # FIXED: Return BST to pool instead of destroying it
+            success = await self.bot.db.reset_user_and_return_to_pool(user.id)
+            
+            if not success:
+                await interaction.response.send_message("❌ Failed to reset user!", ephemeral=True)
+                return
+            
+            new_pool = await self.bot.db.get_pool_balance()
             
             embed = discord.Embed(
                 title="✅ User Reset",
                 description=f"Reset {user.mention}'s BST to **0 BST**",
-                color=0xED4245
+                color=0x57F287
             )
-            embed.add_field(name="📊 Previous Balance", value=f"{old_balance:.2f} BST")
+            embed.add_field(name="📊 Previous Balance", value=f"{old_balance:.2f} BST", inline=True)
+            embed.add_field(name="♻️ Returned to Pool", value=f"{old_balance:.2f} BST", inline=True)
+            embed.add_field(name="💰 New Pool Balance", value=f"{new_pool:.2f} BST", inline=False)
+            embed.set_footer(text="✅ BST returned to economy pool")
             
             await interaction.response.send_message(embed=embed, ephemeral=True)
         except Exception as e:
             await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
+
+    # ==================== NEW INVENTORY MANAGEMENT COMMANDS ====================
+
+    @app_commands.command(name="removeitem", description="Remove specific item from user's inventory (Manager)")
+    @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
+    async def removeitem(self, interaction: discord.Interaction, user: discord.Member, item_name: str, quantity: int = 1):
+        if not self.has_manager_role(interaction):
+            await interaction.response.send_message("❌ Manager role required!", ephemeral=True)
+            return
+
+        if quantity <= 0:
+            await interaction.response.send_message("❌ Quantity must be positive!", ephemeral=True)
+            return
+
+        try:
+            # Check if user has the item
+            inventory = await self.bot.db.get_inventory(user.id)
+            
+            item_found = None
+            for item in inventory['items']:
+                if item['item_name'].lower() == item_name.lower():
+                    item_found = item
+                    break
+            
+            if not item_found:
+                await interaction.response.send_message(
+                    f"❌ {user.mention} doesn't have **{item_name}** in their inventory!",
+                    ephemeral=True
+                )
+                return
+            
+            if item_found['quantity'] < quantity:
+                await interaction.response.send_message(
+                    f"❌ {user.mention} only has **{item_found['quantity']}x {item_name}** (trying to remove {quantity})",
+                    ephemeral=True
+                )
+                return
+            
+            # Remove item
+            success = await self.bot.db.remove_inventory_item(user.id, item_name, quantity)
+            
+            if not success:
+                await interaction.response.send_message("❌ Failed to remove item!", ephemeral=True)
+                return
+            
+            embed = discord.Embed(
+                title="✅ Item Removed",
+                description=f"Removed **{quantity}x {item_name}** from {user.mention}'s inventory",
+                color=0xFEE75C
+            )
+            
+            remaining = item_found['quantity'] - quantity
+            if remaining > 0:
+                embed.add_field(name="📦 Remaining", value=f"{remaining}x {item_name}", inline=True)
+            else:
+                embed.add_field(name="📦 Status", value="Item completely removed", inline=True)
+            
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
+
+    @app_commands.command(name="resetinventory", description="Clear ALL items from user's inventory (Manager)")
+    @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
+    async def resetinventory(self, interaction: discord.Interaction, user: discord.Member):
+        if not self.has_manager_role(interaction):
+            await interaction.response.send_message("❌ Manager role required!", ephemeral=True)
+            return
+
+        try:
+            # Get current inventory
+            inventory = await self.bot.db.get_inventory(user.id)
+            
+            if not inventory['items']:
+                await interaction.response.send_message(
+                    f"❌ {user.mention} has no items in their inventory!",
+                    ephemeral=True
+                )
+                return
+            
+            item_count = len(inventory['items'])
+            total_items = sum(item['quantity'] for item in inventory['items'])
+            
+            # Confirm reset
+            class ConfirmView(discord.ui.View):
+                def __init__(self):
+                    super().__init__(timeout=30)
+                    self.value = None
+
+                @discord.ui.button(label="⚠️ CONFIRM RESET", style=discord.ButtonStyle.danger)
+                async def confirm(self, button_int: discord.Interaction, button: discord.ui.Button):
+                    self.value = True
+                    self.stop()
+                    await button_int.response.defer()
+
+                @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+                async def cancel(self, button_int: discord.Interaction, button: discord.ui.Button):
+                    self.value = False
+                    self.stop()
+                    await button_int.response.defer()
+            
+            embed = discord.Embed(
+                title="⚠️ WARNING: Reset Inventory",
+                description=(
+                    f"This will remove **ALL items** from {user.mention}'s inventory!\n\n"
+                    f"**{item_count} unique items** ({total_items} total items) will be deleted.\n\n"
+                    "**This action cannot be undone!**"
+                ),
+                color=0xED4245
+            )
+            
+            # Show items being deleted
+            items_list = []
+            for item in inventory['items'][:10]:
+                items_list.append(f"• {item['item_name']} x{item['quantity']}")
+            
+            if len(inventory['items']) > 10:
+                items_list.append(f"\n*...and {len(inventory['items']) - 10} more items*")
+            
+            embed.add_field(name="Items to be deleted:", value="\n".join(items_list), inline=False)
+            
+            view = ConfirmView()
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+            await view.wait()
+            
+            if view.value:
+                success = await self.bot.db.clear_inventory(user.id)
+                
+                if not success:
+                    await interaction.edit_original_response(
+                        content="❌ Failed to clear inventory!",
+                        embed=None,
+                        view=None
+                    )
+                    return
+                
+                success_embed = discord.Embed(
+                    title="✅ Inventory Cleared",
+                    description=f"Removed **{total_items} items** from {user.mention}'s inventory",
+                    color=0x57F287
+                )
+                success_embed.add_field(name="Unique Items", value=f"{item_count}", inline=True)
+                success_embed.add_field(name="Total Items", value=f"{total_items}", inline=True)
+                
+                await interaction.edit_original_response(
+                    content=None,
+                    embed=success_embed,
+                    view=None
+                )
+            else:
+                await interaction.edit_original_response(
+                    content="❌ Reset cancelled.",
+                    embed=None,
+                    view=None
+                )
+                
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
+
 
 async def setup(bot):
     await bot.add_cog(Admin(bot))
