@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 COUNTING_CHANNELS = [int(x.strip()) for x in os.getenv('COUNTING_CHANNELS', '').split(',') if x.strip()]
 MESSAGES_PER_BST = 800
-WEEKLY_CAP = 10.0
+WEEKLY_CAP_PER_USER = 10.0
 
 class Economy(commands.Cog):
     def __init__(self, bot):
@@ -18,10 +18,10 @@ class Economy(commands.Cog):
 
     @tasks.loop(hours=24)
     async def weekly_reset(self):
-        """Reset weekly cap every Monday"""
+        """Reset ALL users' weekly cap every Monday"""
         if datetime.now().weekday() == 0:  # Monday
-            await self.bot.db.reset_weekly_cap()
-            print("✅ Weekly cap reset!")
+            await self.bot.db.reset_all_weekly_earnings()
+            print("✅ Weekly cap reset for ALL users!")
 
     @weekly_reset.before_loop
     async def before_weekly_reset(self):
@@ -40,21 +40,22 @@ class Economy(commands.Cog):
             
             # Check if user reached 800 messages
             if new_count % MESSAGES_PER_BST == 0:
-                # Check weekly cap
-                weekly_remaining = await self.bot.db.get_weekly_remaining()
-                pool_balance = await self.bot.db.get_pool_balance()
+                # Check user's personal weekly cap
+                weekly_remaining = await self.bot.db.get_user_weekly_remaining(message.author.id)
                 
-                if weekly_remaining >= 1.0 and pool_balance >= 1.0:
-                    # Give BST to user
-                    await self.bot.db.add_bst(message.author.id, 1.0)
+                if weekly_remaining >= 1.0:
+                    # User has room in their weekly cap
+                    # Add BST directly to user (doesn't touch main pool)
+                    await self.bot.db.add_bst_direct(message.author.id, 1.0)
                     
-                    # Remove from pool and update weekly cap
-                    await self.bot.db.remove_from_pool(1.0)
-                    await self.bot.db.increment_weekly_distributed(1.0)
+                    # Increment user's weekly earnings
+                    await self.bot.db.increment_user_weekly_earnings(message.author.id, 1.0)
+                    
+                    # Reset message count
                     await self.bot.db.reset_messages(message.author.id)
                     
                     balance = await self.bot.db.get_balance(message.author.id)
-                    weekly_remaining = await self.bot.db.get_weekly_remaining()
+                    new_weekly_remaining = await self.bot.db.get_user_weekly_remaining(message.author.id)
                     
                     embed = discord.Embed(
                         title="🎉 BST Earned!",
@@ -62,22 +63,25 @@ class Economy(commands.Cog):
                         color=discord.Color.gold()
                     )
                     embed.add_field(name="💰 Your Balance", value=f"**{balance:.2f} BST**", inline=True)
-                    embed.add_field(name="📅 Weekly Remaining", value=f"**{weekly_remaining:.1f} BST**", inline=True)
-                    embed.add_field(name="💬 Messages", value=f"**{new_count}** total messages", inline=False)
+                    embed.add_field(name="📅 Weekly Remaining", value=f"**{new_weekly_remaining:.1f}/{WEEKLY_CAP_PER_USER} BST**", inline=True)
+                    embed.add_field(name="💬 Total Messages", value=f"**{new_count}** messages sent", inline=False)
+                    embed.set_footer(text="Your BST is saved! Spend it on boxes or trade it.")
                     
                     await message.channel.send(embed=embed, delete_after=15)
                 else:
-                    # Not enough in pool or weekly cap reached
-                    if weekly_remaining < 1.0:
-                        reason = "Weekly cap reached! Wait for reset."
-                    else:
-                        reason = "Economy pool empty! Ask owner to mint more BST."
-                    
+                    # User hit their personal weekly cap
                     embed = discord.Embed(
-                        title="❌ BST Not Available",
-                        description=f"{message.author.mention} reached 800 messages but: {reason}",
-                        color=discord.Color.red()
+                        title="📅 Weekly Cap Reached",
+                        description=f"{message.author.mention} reached 800 messages but you've earned your **{WEEKLY_CAP_PER_USER} BST limit** this week!",
+                        color=discord.Color.orange()
                     )
+                    embed.add_field(
+                        name="⏰ Reset",
+                        value="Your weekly cap resets every **Monday**",
+                        inline=False
+                    )
+                    embed.set_footer(text="Come back next week to earn more BST!")
+                    
                     await message.channel.send(embed=embed, delete_after=10)
                     
         except Exception as e:
@@ -92,7 +96,11 @@ class Economy(commands.Cog):
         try:
             balance = await self.bot.db.get_balance(target.id)
             msg_count = await self.bot.db.get_message_count(target.id)
-            weekly_remaining = await self.bot.db.get_weekly_remaining()
+            weekly_remaining = await self.bot.db.get_user_weekly_remaining(target.id)
+            
+            # Get weekly earnings
+            weekly_data = await self.bot.db.get_user_weekly_earnings(target.id)
+            weekly_earned = weekly_data['bst_earned'] if weekly_data else 0.0
             
             # Progress calculations
             progress_to_next = msg_count % MESSAGES_PER_BST
@@ -121,14 +129,13 @@ class Economy(commands.Cog):
             )
             
             embed.add_field(
-                name="📅 Weekly Status",
-                value=f"**{weekly_remaining:.1f}/{WEEKLY_CAP} BST** remaining this week",
+                name="📅 This Week",
+                value=f"**Earned:** {weekly_earned:.1f} BST\n**Remaining:** {weekly_remaining:.1f}/{WEEKLY_CAP_PER_USER} BST",
                 inline=False
             )
             
-            embed.set_footer(text="Send 800 messages to earn 1 BST • Weekly cap: 10 BST")
+            embed.set_footer(text="Send 800 messages = 1 BST • 10 BST max per week • Resets Monday")
             
-            # PUBLIC - SEND TO CHANNEL
             await interaction.response.send_message(embed=embed)
             
         except Exception as e:
@@ -140,7 +147,11 @@ class Economy(commands.Cog):
         """PUBLIC message progress"""
         try:
             msg_count = await self.bot.db.get_message_count(interaction.user.id)
-            weekly_remaining = await self.bot.db.get_weekly_remaining()
+            weekly_remaining = await self.bot.db.get_user_weekly_remaining(interaction.user.id)
+            
+            # Get weekly earnings
+            weekly_data = await self.bot.db.get_user_weekly_earnings(interaction.user.id)
+            weekly_earned = weekly_data['bst_earned'] if weekly_data else 0.0
             
             progress_to_next = msg_count % MESSAGES_PER_BST
             remaining_messages = MESSAGES_PER_BST - progress_to_next
@@ -174,14 +185,20 @@ class Economy(commands.Cog):
             )
             
             embed.add_field(
-                name="📅 Weekly Cap",
-                value=f"**{weekly_remaining:.1f} BST** available this week",
+                name="📅 Weekly Status",
+                value=f"**Earned:** {weekly_earned:.1f} BST\n**Can Earn:** {weekly_remaining:.1f} more BST this week",
                 inline=False
             )
             
-            embed.set_footer(text="Keep chatting to earn BST! 800 messages = 1 BST")
+            if weekly_remaining == 0:
+                embed.add_field(
+                    name="⚠️ Weekly Cap Reached",
+                    value="You've hit your 10 BST limit! Resets Monday.",
+                    inline=False
+                )
             
-            # PUBLIC - SEND TO CHANNEL
+            embed.set_footer(text="Keep chatting to earn BST! 800 messages = 1 BST • Max 10 BST/week")
+            
             await interaction.response.send_message(embed=embed)
             
         except Exception as e:
@@ -193,9 +210,12 @@ class Economy(commands.Cog):
         """PUBLIC leaderboard"""
         try:
             balances = await self.bot.db.get_all_balances()
-            weekly_remaining = await self.bot.db.get_weekly_remaining()
             pool_balance = await self.bot.db.get_pool_balance()
             total_circulation = await self.bot.db.get_total_bst_in_circulation()
+            
+            # Get total weekly distributed across all users
+            week_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            week_start = week_start - timedelta(days=week_start.weekday())
             
             if not balances:
                 await interaction.response.send_message("No one has BST yet! Start chatting to earn BST.")
@@ -226,13 +246,12 @@ class Economy(commands.Cog):
             
             embed.add_field(
                 name="💰 Economy Status",
-                value=f"**Pool:** {pool_balance:.2f} BST\n**In Circulation:** {total_circulation:.2f} BST\n**Weekly Left:** {weekly_remaining:.1f} BST",
+                value=f"**Main Pool:** {pool_balance:.2f} BST\n**In Circulation:** {total_circulation:.2f} BST",
                 inline=True
             )
             
-            embed.set_footer(text="Earn BST by sending messages in counting channels!")
+            embed.set_footer(text="Earn BST by sending messages! 800 msgs = 1 BST • Max 10/week")
             
-            # PUBLIC - SEND TO CHANNEL
             await interaction.response.send_message(embed=embed)
             
         except Exception as e:
