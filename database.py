@@ -19,25 +19,12 @@ class Database:
             command_timeout=60
         )
         print("✅ Database connected")
-        await self.initialize_weekly_cap()
 
     async def close(self):
         """Close database connection"""
         if self.pool:
             await self.pool.close()
             print("✅ Database disconnected")
-
-    async def initialize_weekly_cap(self):
-        """Initialize weekly cap system"""
-        async with self.pool.acquire() as conn:
-            week_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            week_start = week_start - timedelta(days=week_start.weekday())
-            
-            await conn.execute("""
-                INSERT INTO weekly_cap (week_start, bst_distributed, total_cap)
-                VALUES ($1, 0.00, 10.00)
-                ON CONFLICT (week_start) DO NOTHING
-            """, week_start.date())
 
     # ==================== USER MANAGEMENT ====================
     
@@ -97,6 +84,17 @@ class Database:
                 
                 return True
 
+    async def add_bst_direct(self, user_id: int, amount: float) -> bool:
+        """Add BST directly to user (for weekly message rewards - doesn't touch main pool)"""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO users (user_id, bst_balance, message_count)
+                VALUES ($1, $2, 0)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    bst_balance = users.bst_balance + $2
+            """, user_id, amount)
+            return True
+
     async def remove_bst(self, user_id: int, amount: float) -> bool:
         """Remove BST from user (with balance check) - BST IS DESTROYED"""
         async with self.pool.acquire() as conn:
@@ -118,7 +116,7 @@ class Database:
             return True
 
     async def reset_user_and_return_to_pool(self, user_id: int) -> bool:
-        """Reset user's BST to 0 and RETURN their balance to the pool"""
+        """Reset user's BST to 0 and RETURN their balance to the MAIN pool"""
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 # Get user's current balance
@@ -136,7 +134,7 @@ class Database:
                     """, user_id)
                     return True
                 
-                # Return BST to pool
+                # Return BST to MAIN pool (not weekly pool)
                 await conn.execute("""
                     UPDATE economy_pool
                     SET pool_amount = pool_amount + $1,
@@ -188,7 +186,7 @@ class Database:
     # ==================== ECONOMY POOL ====================
     
     async def get_pool_balance(self) -> float:
-        """Get current pool balance"""
+        """Get current MAIN pool balance"""
         async with self.pool.acquire() as conn:
             result = await conn.fetchval(
                 "SELECT pool_amount FROM economy_pool WHERE pool_id = 1"
@@ -196,7 +194,7 @@ class Database:
             return float(result) if result else 0.0
 
     async def add_to_pool(self, amount: float) -> float:
-        """Add BST to economy pool (minting) - OWNER ONLY"""
+        """Add BST to MAIN economy pool (minting) - OWNER ONLY"""
         async with self.pool.acquire() as conn:
             result = await conn.fetchrow("""
                 INSERT INTO economy_pool (pool_id, pool_amount)
@@ -209,7 +207,7 @@ class Database:
             return float(result['pool_amount']) if result else 0.0
 
     async def remove_from_pool(self, amount: float) -> Optional[float]:
-        """Remove BST from pool (with check)"""
+        """Remove BST from MAIN pool (with check)"""
         async with self.pool.acquire() as conn:
             result = await conn.fetchrow("""
                 UPDATE economy_pool
@@ -221,7 +219,7 @@ class Database:
             return float(result['pool_amount']) if result else None
 
     async def reset_pool(self) -> bool:
-        """Reset pool to 0 (for supply reset)"""
+        """Reset MAIN pool to 0 (for supply reset)"""
         async with self.pool.acquire() as conn:
             await conn.execute("""
                 UPDATE economy_pool 
@@ -230,56 +228,94 @@ class Database:
             """)
             return True
 
-    # ==================== WEEKLY CAP ====================
+    # ==================== PER-USER WEEKLY CAP ====================
     
-    async def get_weekly_cap(self) -> Dict[str, Any]:
-        """Get current week's cap information"""
+    async def get_user_weekly_earnings(self, user_id: int) -> Dict[str, Any]:
+        """Get user's current week earnings"""
         async with self.pool.acquire() as conn:
             week_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
             week_start = week_start - timedelta(days=week_start.weekday())
             
             row = await conn.fetchrow("""
-                INSERT INTO weekly_cap (week_start, bst_distributed, total_cap)
-                VALUES ($1, 0.00, 10.00)
-                ON CONFLICT (week_start) DO UPDATE SET week_start = weekly_cap.week_start
+                INSERT INTO user_weekly_earnings (user_id, week_start, bst_earned, weekly_limit)
+                VALUES ($1, $2, 0.00, 10.00)
+                ON CONFLICT (user_id, week_start) DO UPDATE 
+                SET user_id = user_weekly_earnings.user_id
                 RETURNING *
-            """, week_start.date())
+            """, user_id, week_start.date())
             
             return dict(row) if row else None
 
-    async def increment_weekly_distributed(self, amount: float = 1.0) -> bool:
-        """Increment weekly distributed BST"""
+    async def increment_user_weekly_earnings(self, user_id: int, amount: float = 1.0) -> bool:
+        """Increment user's weekly BST earned (returns True if under cap)"""
         async with self.pool.acquire() as conn:
             week_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
             week_start = week_start - timedelta(days=week_start.weekday())
             
+            # Get current earnings
+            current = await conn.fetchrow("""
+                INSERT INTO user_weekly_earnings (user_id, week_start, bst_earned, weekly_limit)
+                VALUES ($1, $2, 0.00, 10.00)
+                ON CONFLICT (user_id, week_start) DO UPDATE 
+                SET user_id = user_weekly_earnings.user_id
+                RETURNING bst_earned, weekly_limit
+            """, user_id, week_start.date())
+            
+            if not current:
+                return False
+            
+            # Check if user is under weekly limit
+            if current['bst_earned'] + amount > current['weekly_limit']:
+                return False
+            
+            # Increment earnings
             result = await conn.execute("""
-                UPDATE weekly_cap 
-                SET bst_distributed = bst_distributed + $1
-                WHERE week_start = $2 AND bst_distributed + $1 <= total_cap
-            """, amount, week_start.date())
+                UPDATE user_weekly_earnings
+                SET bst_earned = bst_earned + $3,
+                    updated_at = NOW()
+                WHERE user_id = $1 AND week_start = $2
+            """, user_id, week_start.date(), amount)
             
             return "UPDATE 1" in result
 
-    async def get_weekly_remaining(self) -> float:
-        """Get remaining BST available this week"""
-        weekly_cap = await self.get_weekly_cap()
-        if not weekly_cap:
+    async def get_user_weekly_remaining(self, user_id: int) -> float:
+        """Get how much BST user can still earn this week"""
+        weekly = await self.get_user_weekly_earnings(user_id)
+        if not weekly:
             return 10.0
-        return max(0, weekly_cap['total_cap'] - weekly_cap['bst_distributed'])
+        return max(0, weekly['weekly_limit'] - weekly['bst_earned'])
 
-    async def reset_weekly_cap(self) -> bool:
-        """Reset weekly cap (Monday reset)"""
+    async def reset_all_weekly_earnings(self) -> bool:
+        """Reset ALL users' weekly earnings (Monday reset)"""
         async with self.pool.acquire() as conn:
             week_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
             week_start = week_start - timedelta(days=week_start.weekday())
             
+            # Delete old week records (keeps database clean)
             await conn.execute("""
-                UPDATE weekly_cap 
-                SET bst_distributed = 0.00
+                DELETE FROM user_weekly_earnings
+                WHERE week_start < $1
+            """, week_start.date())
+            
+            return True
+
+    # ==================== WEEKLY CAP COMPATIBILITY (for display) ====================
+    
+    async def get_weekly_remaining(self) -> float:
+        """Get server-wide weekly remaining (for display in /pool command)"""
+        # This is just for display - actual checking is per-user now
+        async with self.pool.acquire() as conn:
+            week_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            week_start = week_start - timedelta(days=week_start.weekday())
+            
+            # Get total distributed this week across all users
+            total = await conn.fetchval("""
+                SELECT COALESCE(SUM(bst_earned), 0)
+                FROM user_weekly_earnings
                 WHERE week_start = $1
             """, week_start.date())
-            return True
+            
+            return float(total) if total else 0.0
 
     # ==================== TRADING SYSTEM ====================
     
@@ -617,7 +653,7 @@ class Database:
             circulation = await self.get_total_bst_in_circulation()
             user_count = await self.get_user_count()
             boxes_opened = await self.get_total_boxes_opened()
-            weekly_remaining = await self.get_weekly_remaining()
+            weekly_distributed = await self.get_weekly_remaining()
             
             return {
                 'pool_balance': pool_balance,
@@ -625,7 +661,7 @@ class Database:
                 'total_supply': pool_balance + circulation,
                 'user_count': user_count,
                 'boxes_opened': boxes_opened,
-                'weekly_remaining': weekly_remaining
+                'weekly_distributed': weekly_distributed
             }
 
     async def reset_user(self, user_id: int) -> bool:
