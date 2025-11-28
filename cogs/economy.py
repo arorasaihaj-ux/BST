@@ -257,5 +257,87 @@ class Economy(commands.Cog):
         except Exception as e:
             await interaction.response.send_message(f"❌ Error: {e}")
 
+    # ==================== DEBUG COMMANDS (REMOVE AFTER TESTING) ====================
+
+    @app_commands.command(name="testweekly", description="[DEBUG] Test weekly cap system")
+    @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
+    async def testweekly(self, interaction: discord.Interaction):
+        """Test if weekly system works"""
+        try:
+            # Get user's weekly data
+            weekly_data = await self.bot.db.get_user_weekly_earnings(interaction.user.id)
+            weekly_remaining = await self.bot.db.get_user_weekly_remaining(interaction.user.id)
+            balance = await self.bot.db.get_balance(interaction.user.id)
+            msg_count = await self.bot.db.get_message_count(interaction.user.id)
+            
+            embed = discord.Embed(
+                title="🔍 Debug Info",
+                color=discord.Color.blue()
+            )
+            
+            if weekly_data:
+                embed.add_field(
+                    name="Weekly Data Found",
+                    value=f"✅ Earned: {weekly_data['bst_earned']}\n✅ Limit: {weekly_data['weekly_limit']}\n✅ Week Start: {weekly_data['week_start']}",
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="Weekly Data",
+                    value="❌ No data (will be created on first reward)",
+                    inline=False
+                )
+            
+            embed.add_field(name="Current Balance", value=f"{balance:.2f} BST", inline=True)
+            embed.add_field(name="Message Count", value=f"{msg_count}", inline=True)
+            embed.add_field(name="Weekly Remaining", value=f"{weekly_remaining:.1f} BST", inline=True)
+            
+            # Test if we can increment
+            can_earn = weekly_remaining >= 1.0
+            embed.add_field(
+                name="Can Earn Next BST?",
+                value="✅ Yes" if can_earn else "❌ No (weekly cap hit)",
+                inline=False
+            )
+            
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
+
+    @app_commands.command(name="forcereward", description="[DEBUG] Force give yourself 1 BST (testing)")
+    @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
+    async def forcereward(self, interaction: discord.Interaction):
+        """Manually trigger the reward system"""
+        try:
+            weekly_remaining = await self.bot.db.get_user_weekly_remaining(interaction.user.id)
+            
+            if weekly_remaining >= 1.0:
+                # Give BST
+                await self.bot.db.add_bst_direct(interaction.user.id, 1.0)
+                await self.bot.db.increment_user_weekly_earnings(interaction.user.id, 1.0)
+                
+                balance = await self.bot.db.get_balance(interaction.user.id)
+                new_remaining = await self.bot.db.get_user_weekly_remaining(interaction.user.id)
+                
+                embed = discord.Embed(
+                    title="✅ Test Reward Given",
+                    description="Simulated 800 messages reward",
+                    color=discord.Color.green()
+                )
+                embed.add_field(name="New Balance", value=f"{balance:.2f} BST", inline=True)
+                embed.add_field(name="Weekly Remaining", value=f"{new_remaining:.1f} BST", inline=True)
+                
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+            else:
+                await interaction.response.send_message(
+                    f"❌ Weekly cap reached! You can't earn more this week.",
+                    ephemeral=True
+                )
+                
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
+
+
 async def setup(bot):
     await bot.add_cog(Economy(bot))
