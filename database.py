@@ -105,6 +105,63 @@ class Database:
             """, amount, user_id)
             return "UPDATE 1" in result
 
+    async def remove_bst_return_to_pool(self, user_id: int, amount: float) -> bool:
+        """Remove BST from user and RETURN to pool"""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                # Remove from user
+                result = await conn.execute("""
+                    UPDATE users 
+                    SET bst_balance = bst_balance - $1
+                    WHERE user_id = $2 AND bst_balance >= $1
+                """, amount, user_id)
+                
+                if "UPDATE 0" in result:
+                    return False
+                
+                # Add to pool
+                await conn.execute("""
+                    UPDATE economy_pool
+                    SET pool_amount = pool_amount + $1,
+                        updated_at = NOW()
+                    WHERE pool_id = 1
+                """, amount)
+                
+                return True
+
+    async def buy_box_with_bst(self, user_id: int, cost: float) -> bool:
+        """Remove BST from user when buying box and RETURN TO POOL"""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                # Check balance
+                balance = await conn.fetchval(
+                    "SELECT bst_balance FROM users WHERE user_id = $1",
+                    user_id
+                )
+                
+                if not balance or balance < cost:
+                    return False
+                
+                # Remove from user
+                result = await conn.execute("""
+                    UPDATE users 
+                    SET bst_balance = bst_balance - $1
+                    WHERE user_id = $2 AND bst_balance >= $1
+                """, cost, user_id)
+                
+                if "UPDATE 0" in result:
+                    return False
+                
+                # Return to pool
+                await conn.execute("""
+                    UPDATE economy_pool
+                    SET pool_amount = pool_amount + $1,
+                        updated_at = NOW()
+                    WHERE pool_id = 1
+                """, cost)
+                
+                return True
+
     async def set_bst(self, user_id: int, amount: float) -> bool:
         """Set exact BST amount - ONLY OWNER CAN USE THIS"""
         async with self.pool.acquire() as conn:
@@ -217,6 +274,28 @@ class Database:
                 RETURNING pool_amount
             """, amount)
             return float(result['pool_amount']) if result else None
+
+    async def remove_from_pool_direct(self, amount: float) -> float:
+        """Remove BST from pool directly (destroys it)"""
+        async with self.pool.acquire() as conn:
+            result = await conn.fetchrow("""
+                UPDATE economy_pool
+                SET pool_amount = pool_amount - $1,
+                    updated_at = NOW()
+                WHERE pool_id = 1
+                RETURNING pool_amount
+            """, amount)
+            return float(result['pool_amount']) if result else 0.0
+
+    async def set_pool_balance(self, amount: float) -> bool:
+        """Set exact pool balance"""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE economy_pool 
+                SET pool_amount = $1, updated_at = NOW() 
+                WHERE pool_id = 1
+            """, amount)
+            return True
 
     async def reset_pool(self) -> bool:
         """Reset MAIN pool to 0 (for supply reset)"""
