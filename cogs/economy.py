@@ -3,6 +3,7 @@ from discord.ext import commands, tasks
 from discord import app_commands
 import os
 from datetime import datetime, timedelta
+import decimal
 
 COUNTING_CHANNELS = [int(x.strip()) for x in os.getenv('COUNTING_CHANNELS', '').split(',') if x.strip()]
 MESSAGES_PER_BST = 800
@@ -15,6 +16,16 @@ class Economy(commands.Cog):
 
     def cog_unload(self):
         self.weekly_reset.cancel()
+
+    def convert_decimals(self, data):
+        """Convert all decimal.Decimal to float for safe operations"""
+        if isinstance(data, dict):
+            return {k: float(v) if isinstance(v, decimal.Decimal) else v for k, v in data.items()}
+        elif isinstance(data, list):
+            return [float(item) if isinstance(item, decimal.Decimal) else item for item in data]
+        elif isinstance(data, decimal.Decimal):
+            return float(data)
+        return data
 
     @tasks.loop(hours=24)
     async def weekly_reset(self):
@@ -40,35 +51,28 @@ class Economy(commands.Cog):
             
             # Check if user reached 800 messages
             if new_count % MESSAGES_PER_BST == 0:
-                # FIXED: Check user's personal weekly cap BEFORE giving BST
                 weekly_data = await self.bot.db.get_user_weekly_earnings(message.author.id)
+                weekly_data = self.convert_decimals(weekly_data)
                 
-                if not weekly_data:
-                    # Initialize weekly data
-                    weekly_data = await self.bot.db.get_user_weekly_earnings(message.author.id)
-                
-                # Calculate remaining - FIXED: Convert decimal to float
-                weekly_earned = float(weekly_data['bst_earned']) if weekly_data else 0.0
+                # Calculate remaining
+                weekly_earned = weekly_data['bst_earned'] if weekly_data else 0.0
                 weekly_remaining = WEEKLY_CAP_PER_USER - weekly_earned
                 
                 if weekly_remaining >= 1.0:
                     # User has room in their weekly cap
-                    # Give BST directly to user (doesn't touch main pool)
                     await self.bot.db.add_bst_direct(message.author.id, 1.0)
-                    
-                    # FIXED: Increment user's weekly earnings AFTER giving BST
                     await self.bot.db.increment_user_weekly_earnings(message.author.id, 1.0)
-                    
-                    # Reset message count
                     await self.bot.db.reset_messages(message.author.id)
                     
-                    # Get updated data - FIXED: Convert decimal to float
+                    # Get updated data
                     balance = await self.bot.db.get_balance(message.author.id)
+                    balance = self.convert_decimals(balance)
+                    
                     new_weekly_data = await self.bot.db.get_user_weekly_earnings(message.author.id)
-                    new_weekly_earned = float(new_weekly_data['bst_earned']) if new_weekly_data else 0.0
+                    new_weekly_data = self.convert_decimals(new_weekly_data)
+                    new_weekly_earned = new_weekly_data['bst_earned'] if new_weekly_data else 0.0
                     new_weekly_remaining = WEEKLY_CAP_PER_USER - new_weekly_earned
                     
-                    # FIXED: Premium message without emojis, clean format
                     embed = discord.Embed(
                         title="BST EARNED",
                         description=(
@@ -111,11 +115,15 @@ class Economy(commands.Cog):
         
         try:
             balance = await self.bot.db.get_balance(target.id)
-            msg_count = await self.bot.db.get_message_count(target.id)
+            balance = self.convert_decimals(balance) or 0.0
             
-            # Get weekly data - FIXED: Convert decimal to float
+            msg_count = await self.bot.db.get_message_count(target.id)
+            msg_count = self.convert_decimals(msg_count) or 0
+            
+            # Get weekly data
             weekly_data = await self.bot.db.get_user_weekly_earnings(target.id)
-            weekly_earned = float(weekly_data['bst_earned']) if weekly_data else 0.0
+            weekly_data = self.convert_decimals(weekly_data)
+            weekly_earned = weekly_data['bst_earned'] if weekly_data else 0.0
             weekly_remaining = WEEKLY_CAP_PER_USER - weekly_earned
             
             # Progress calculations
@@ -155,7 +163,8 @@ class Economy(commands.Cog):
             await interaction.response.send_message(embed=embed)
             
         except Exception as e:
-            await interaction.response.send_message(f"❌ Error: {e}")
+            print(f"Balance command error: {e}")
+            await interaction.response.send_message(f"❌ Error checking balance: {str(e)}", ephemeral=True)
 
     @app_commands.command(name="messages", description="Check your message progress")
     @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
@@ -163,10 +172,12 @@ class Economy(commands.Cog):
         """PUBLIC message progress"""
         try:
             msg_count = await self.bot.db.get_message_count(interaction.user.id)
+            msg_count = self.convert_decimals(msg_count) or 0
             
-            # Get weekly data - FIXED: Convert decimal to float
+            # Get weekly data
             weekly_data = await self.bot.db.get_user_weekly_earnings(interaction.user.id)
-            weekly_earned = float(weekly_data['bst_earned']) if weekly_data else 0.0
+            weekly_data = self.convert_decimals(weekly_data)
+            weekly_earned = weekly_data['bst_earned'] if weekly_data else 0.0
             weekly_remaining = WEEKLY_CAP_PER_USER - weekly_earned
             
             progress_to_next = msg_count % MESSAGES_PER_BST
@@ -218,16 +229,25 @@ class Economy(commands.Cog):
             await interaction.response.send_message(embed=embed)
             
         except Exception as e:
-            await interaction.response.send_message(f"❌ Error: {e}")
+            print(f"Messages command error: {e}")
+            await interaction.response.send_message(f"❌ Error checking messages: {str(e)}", ephemeral=True)
 
     @app_commands.command(name="leaderboard", description="View BST leaderboard")
     @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
     async def leaderboard(self, interaction: discord.Interaction):
         """PUBLIC leaderboard"""
         try:
-            balances = await self.bot.db.get_all_balances()
+            balances_data = await self.bot.db.get_all_balances()
+            # Convert list of tuples to proper format and convert decimals
+            balances = []
+            for user_id, balance in balances_data:
+                balances.append((user_id, self.convert_decimals(balance)))
+            
             pool_balance = await self.bot.db.get_pool_balance()
+            pool_balance = self.convert_decimals(pool_balance) or 0.0
+            
             total_circulation = await self.bot.db.get_total_bst_in_circulation()
+            total_circulation = self.convert_decimals(total_circulation) or 0.0
             
             if not balances:
                 await interaction.response.send_message("No one has BST yet! Start chatting to earn BST.")
@@ -267,7 +287,8 @@ class Economy(commands.Cog):
             await interaction.response.send_message(embed=embed)
             
         except Exception as e:
-            await interaction.response.send_message(f"❌ Error: {e}")
+            print(f"Leaderboard command error: {e}")
+            await interaction.response.send_message(f"❌ Error loading leaderboard: {str(e)}", ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(Economy(bot))
