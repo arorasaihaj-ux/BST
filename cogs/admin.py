@@ -6,15 +6,16 @@ import os
 class Admin(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.owner_role_id = int(os.getenv('OWNER_ROLE_ID'))
+        # CHANGED: Now uses Discord User ID instead of Role ID
+        self.owner_user_id = int(os.getenv('OWNER_USER_ID'))
         
-        # Parse multiple manager role IDs
+        # Parse multiple manager role IDs (this stays the same)
         manager_roles_str = os.getenv('MANAGER_ROLE_ID', '')
         self.manager_role_ids = [int(role_id.strip()) for role_id in manager_roles_str.split(',') if role_id.strip()]
 
     def has_owner_role(self, interaction: discord.Interaction) -> bool:
-        """Check if user has owner role"""
-        return any(role.id == self.owner_role_id for role in interaction.user.roles)
+        """CHANGED: Check if user IS the owner by user ID"""
+        return interaction.user.id == self.owner_user_id
 
     def has_manager_role(self, interaction: discord.Interaction) -> bool:
         """Check if user has any manager role"""
@@ -26,7 +27,7 @@ class Admin(commands.Cog):
     @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
     async def mint(self, interaction: discord.Interaction, amount: float):
         if not self.has_owner_role(interaction):
-            await interaction.response.send_message("❌ Owner role required!", ephemeral=True)
+            await interaction.response.send_message("❌ Owner permission required!", ephemeral=True)
             return
 
         if amount <= 0:
@@ -55,7 +56,7 @@ class Admin(commands.Cog):
     @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
     async def pool(self, interaction: discord.Interaction):
         if not self.has_owner_role(interaction):
-            await interaction.response.send_message("❌ Owner role required!", ephemeral=True)
+            await interaction.response.send_message("❌ Owner permission required!", ephemeral=True)
             return
 
         try:
@@ -85,7 +86,7 @@ class Admin(commands.Cog):
     @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
     async def circulation(self, interaction: discord.Interaction, page: int = 1):
         if not self.has_owner_role(interaction):
-            await interaction.response.send_message("❌ Owner role required!", ephemeral=True)
+            await interaction.response.send_message("❌ Owner permission required!", ephemeral=True)
             return
 
         try:
@@ -136,7 +137,7 @@ class Admin(commands.Cog):
     @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
     async def setpool(self, interaction: discord.Interaction, amount: float):
         if not self.has_owner_role(interaction):
-            await interaction.response.send_message("❌ Owner role required!", ephemeral=True)
+            await interaction.response.send_message("❌ Owner permission required!", ephemeral=True)
             return
 
         if amount < 0:
@@ -166,7 +167,7 @@ class Admin(commands.Cog):
     @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
     async def addpool(self, interaction: discord.Interaction, amount: float):
         if not self.has_owner_role(interaction):
-            await interaction.response.send_message("❌ Owner role required!", ephemeral=True)
+            await interaction.response.send_message("❌ Owner permission required!", ephemeral=True)
             return
 
         if amount <= 0:
@@ -194,7 +195,7 @@ class Admin(commands.Cog):
     @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
     async def removepool(self, interaction: discord.Interaction, amount: float):
         if not self.has_owner_role(interaction):
-            await interaction.response.send_message("❌ Owner role required!", ephemeral=True)
+            await interaction.response.send_message("❌ Owner permission required!", ephemeral=True)
             return
 
         if amount <= 0:
@@ -231,7 +232,7 @@ class Admin(commands.Cog):
     @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
     async def resetpool(self, interaction: discord.Interaction):
         if not self.has_owner_role(interaction):
-            await interaction.response.send_message("❌ Owner role required!", ephemeral=True)
+            await interaction.response.send_message("❌ Owner permission required!", ephemeral=True)
             return
 
         class ConfirmView(discord.ui.View):
@@ -370,7 +371,6 @@ class Admin(commands.Cog):
                 )
                 return
 
-            # FIXED: Remove BST and return to pool
             success = await self.bot.db.remove_bst_return_to_pool(user.id, amount)
             
             if not success:
@@ -438,7 +438,6 @@ class Admin(commands.Cog):
                 )
                 return
             
-            # FIXED: Return BST to pool
             success = await self.bot.db.reset_user_and_return_to_pool(user.id)
             
             if not success:
