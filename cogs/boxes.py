@@ -4,13 +4,13 @@ from discord import app_commands
 import random
 import os
 
-# Box configurations with FIXED RIGGED REWARDS
+# Box configurations with UPDATED RIGGED REWARDS
 BOX_CONFIG = {
     'base': {
         'name': 'Base Mystery Box',
         'cost': 1.0,
         'color': 0x5865F2,  # Discord Blurple
-        # What players see (DISPLAYED - unchanged)
+        # What players see (DISPLAYED)
         'display_drops': [
             ("Taco Block", "40%"),
             ("Los Lucky Block", "30%"),
@@ -18,20 +18,20 @@ BOX_CONFIG = {
             ("Ques Croc", "7.5%"),
             ("67", "2.5%")
         ],
-        # Actual rigged odds (item, weight)
+        # UPDATED ACTUAL RIGGED ODDS (item, weight)
         'actual_drops': [
-            ("Taco Block", 40.0),
-            ("Los Lucky Block", 40.0),
-            ("40 Robux", 15.0),
-            ("Ques Croc", 2.5),
-            ("67", 2.5)
+            ("Taco Block", 50.0),        # 50%
+            ("Los Lucky Block", 45.0),   # 45%
+            ("40 Robux", 4.0),           # 4%
+            ("Ques Croc", 1.0),          # 1%
+            ("67", 0.0)                  # 0% (impossible to get)
         ]
     },
     'gold': {
         'name': 'Gold Mystery Box',
         'cost': 2.5,
         'color': 0xFEE75C,  # Gold
-        # What players see (DISPLAYED - unchanged)
+        # What players see (DISPLAYED)
         'display_drops': [
             ("3x Los Lucky Block", "40%"),
             ("80 Robux", "25%"),
@@ -40,14 +40,14 @@ BOX_CONFIG = {
             ("La Grande Combi", "3.5%"),
             ("400 Robux", "1%")
         ],
-        # UPDATED RIGGED ODDS - AS REQUESTED
+        # UPDATED ACTUAL RIGGED ODDS
         'actual_drops': [
             ("3x Los Lucky Block", 50.0),  # 50%
-            ("80 Robux", 40.0),             # 40%
-            ("Miet Bike", 5.0),             # 5%
-            ("La Combination", 3.0),        # 3%
-            ("La Grande Combi", 1.0),       # 1%
-            ("400 Robux", 1.0)              # 1%
+            ("80 Robux", 45.0),             # 45%
+            ("Miet Bike", 4.0),             # 4%
+            ("La Combination", 1.0),        # 1%
+            ("La Grande Combi", 0.0),       # 0% (impossible)
+            ("400 Robux", 0.0)              # 0% (impossible)
         ]
     }
 }
@@ -119,8 +119,8 @@ class PremiumBoxView(discord.ui.View):
                 await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
             
-            # Deduct BST
-            success = await interaction.client.db.remove_bst(interaction.user.id, config['cost'])
+            # FIXED: Remove BST from user and RETURN TO POOL
+            success = await interaction.client.db.buy_box_with_bst(interaction.user.id, config['cost'])
             
             if not success:
                 embed = discord.Embed(
