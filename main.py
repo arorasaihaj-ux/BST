@@ -23,8 +23,8 @@ class CleanEconomyBot(commands.Bot):
         self.db = None
         self.initialized = False
         
-        # Role IDs from .env - FIXED TO HANDLE MULTIPLE ROLES
-        self.owner_role_id = int(os.getenv('OWNER_ROLE_ID'))
+        # CHANGED: Now uses User ID for owner instead of Role ID
+        self.owner_user_id = int(os.getenv('OWNER_USER_ID'))
         
         # Parse multiple manager role IDs
         manager_roles_str = os.getenv('MANAGER_ROLE_ID', '')
@@ -62,6 +62,8 @@ class CleanEconomyBot(commands.Bot):
     async def on_ready(self):
         print(f'✅ {self.user} is online!')
         print(f'📊 Guild ID: {self.guild_id}')
+        print(f'👤 Owner User ID: {self.owner_user_id}')
+        print(f'👥 Manager Role IDs: {self.manager_role_ids}')
         
         if not self.initialized:
             # Connect database
@@ -101,4 +103,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
