@@ -47,8 +47,8 @@ class Economy(commands.Cog):
                     # Initialize weekly data
                     weekly_data = await self.bot.db.get_user_weekly_earnings(message.author.id)
                 
-                # Calculate remaining
-                weekly_earned = weekly_data['bst_earned'] if weekly_data else 0.0
+                # Calculate remaining - FIXED: Convert decimal to float
+                weekly_earned = float(weekly_data['bst_earned']) if weekly_data else 0.0
                 weekly_remaining = WEEKLY_CAP_PER_USER - weekly_earned
                 
                 if weekly_remaining >= 1.0:
@@ -62,10 +62,10 @@ class Economy(commands.Cog):
                     # Reset message count
                     await self.bot.db.reset_messages(message.author.id)
                     
-                    # Get updated data
+                    # Get updated data - FIXED: Convert decimal to float
                     balance = await self.bot.db.get_balance(message.author.id)
                     new_weekly_data = await self.bot.db.get_user_weekly_earnings(message.author.id)
-                    new_weekly_earned = new_weekly_data['bst_earned']
+                    new_weekly_earned = float(new_weekly_data['bst_earned']) if new_weekly_data else 0.0
                     new_weekly_remaining = WEEKLY_CAP_PER_USER - new_weekly_earned
                     
                     # FIXED: Premium message without emojis, clean format
@@ -113,9 +113,9 @@ class Economy(commands.Cog):
             balance = await self.bot.db.get_balance(target.id)
             msg_count = await self.bot.db.get_message_count(target.id)
             
-            # Get weekly data
+            # Get weekly data - FIXED: Convert decimal to float
             weekly_data = await self.bot.db.get_user_weekly_earnings(target.id)
-            weekly_earned = weekly_data['bst_earned'] if weekly_data else 0.0
+            weekly_earned = float(weekly_data['bst_earned']) if weekly_data else 0.0
             weekly_remaining = WEEKLY_CAP_PER_USER - weekly_earned
             
             # Progress calculations
@@ -164,9 +164,9 @@ class Economy(commands.Cog):
         try:
             msg_count = await self.bot.db.get_message_count(interaction.user.id)
             
-            # Get weekly data
+            # Get weekly data - FIXED: Convert decimal to float
             weekly_data = await self.bot.db.get_user_weekly_earnings(interaction.user.id)
-            weekly_earned = weekly_data['bst_earned'] if weekly_data else 0.0
+            weekly_earned = float(weekly_data['bst_earned']) if weekly_data else 0.0
             weekly_remaining = WEEKLY_CAP_PER_USER - weekly_earned
             
             progress_to_next = msg_count % MESSAGES_PER_BST
@@ -206,7 +206,7 @@ class Economy(commands.Cog):
                 inline=False
             )
             
-            if weekly_remaining == 0:
+            if weekly_remaining <= 0:
                 embed.add_field(
                     name="Weekly Cap Reached",
                     value="You've hit your 10 BST limit. Resets Monday.",
