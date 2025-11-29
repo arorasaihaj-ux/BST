@@ -32,23 +32,15 @@ class Economy(commands.Cog):
         """Reset weekly pool every Monday"""
         now = datetime.now()
         
-        # Only reset on Monday (0 = Monday)
         if now.weekday() == 0:
-            # Check if we already reset today
             if self.last_reset_check and self.last_reset_check.date() == now.date():
                 return
             
             try:
-                # Get current weekly pool
                 old_weekly = await self.bot.db.get_weekly_pool()
-                
-                # Transfer remaining to main pool
                 transferred = await self.bot.db.transfer_weekly_to_main()
-                
-                # Reset to 10 BST (or whatever default you want)
                 await self.bot.db.reset_weekly_pool(10.0)
                 
-                # Log the reset
                 week_start = now - timedelta(days=now.weekday())
                 await self.bot.db.log_weekly_reset(
                     week_start=week_start,
@@ -75,21 +67,17 @@ class Economy(commands.Cog):
         if message.author.bot:
             return
         
-        # Check if we should count messages in this channel
         if COUNTING_CHANNELS and message.channel.id not in COUNTING_CHANNELS:
             return
 
         try:
             new_count = await self.bot.db.increment_messages(message.author.id)
             
-            # Check if reached 800 messages
             if new_count % MESSAGES_PER_BST == 0:
-                # Check WEEKLY POOL
                 weekly_pool = await self.bot.db.get_weekly_pool()
                 weekly_pool = self.convert_decimals(weekly_pool)
                 
                 if weekly_pool >= 1.0:
-                    # Award 1 BST from weekly pool
                     success = await self.bot.db.add_bst_from_weekly(message.author.id, 1.0)
                     
                     if success:
@@ -102,46 +90,38 @@ class Economy(commands.Cog):
                         new_weekly_pool = self.convert_decimals(new_weekly_pool)
                         
                         embed = discord.Embed(
-                            title="💰 BST EARNED!",
+                            title="BST EARNED",
                             description=(
                                 f"{message.author.mention}\n\n"
-                                f"**You reached 800 messages!**\n"
-                                f"**Awarded: 1 BST**\n\n"
-                                f"💵 Your Balance: **{balance:.2f} BST**\n"
-                                f"📅 Weekly Pool: **{new_weekly_pool:.2f} BST remaining**\n\n"
+                                f"**Awarded:** 1 BST\n"
+                                f"**Your Balance:** {balance:.2f} BST\n"
+                                f"**Weekly Pool:** {new_weekly_pool:.2f} BST remaining\n\n"
                                 f"*Pool resets every Monday*"
                             ),
                             color=0x57F287
                         )
-                        embed.set_footer(text="Keep chatting to earn more BST!")
                         
                         await message.channel.send(embed=embed, delete_after=20)
                     else:
-                        # Failed to award (race condition or error)
                         embed = discord.Embed(
-                            title="⚠️ BST Award Failed",
+                            title="BST Award Failed",
                             description=(
                                 f"{message.author.mention}\n\n"
-                                f"You reached 800 messages, but there was an error awarding BST.\n"
-                                f"Please contact an admin if this persists."
+                                f"Error awarding BST. Contact admin if this persists."
                             ),
                             color=0xFEE75C
                         )
                         await message.channel.send(embed=embed, delete_after=15)
                 else:
-                    # Weekly pool depleted
                     embed = discord.Embed(
-                        title="❌ WEEKLY POOL EMPTY",
+                        title="WEEKLY POOL EMPTY",
                         description=(
                             f"{message.author.mention}\n\n"
-                            f"**You reached 800 messages!**\n\n"
-                            f"However, the **weekly pool is empty** ({weekly_pool:.2f} BST remaining)\n\n"
-                            f"**Weekly pool resets every Monday**\n"
-                            f"Come back then to earn more BST!"
+                            f"You reached 800 messages, but the weekly pool is empty.\n\n"
+                            f"**Weekly pool resets every Monday**"
                         ),
                         color=0xED4245
                     )
-                    embed.set_footer(text="Contact admins if you think this is an error")
                     
                     await message.channel.send(embed=embed, delete_after=15)
                     
@@ -163,53 +143,48 @@ class Economy(commands.Cog):
             weekly_pool = await self.bot.db.get_weekly_pool()
             weekly_pool = self.convert_decimals(weekly_pool)
             
-            # Progress
+            # Progress calculation
             progress_to_next = msg_count % MESSAGES_PER_BST
             remaining_messages = MESSAGES_PER_BST - progress_to_next
             progress_percent = (progress_to_next / MESSAGES_PER_BST) * 100
             
+            # Premium progress bar
             filled = int(progress_percent / 5)
-            bar = "█" * filled + "░" * (20 - filled)
+            bar = "▰" * filled + "▱" * (20 - filled)
             
             embed = discord.Embed(
-                title=f"💰 {target.display_name}'s Balance",
+                title=f"━━━━━ 𝐁𝐀𝐋𝐀𝐍𝐂𝐄 ━━━━━",
+                description=f"**{target.display_name}**",
                 color=0x2B2D31
             )
             
             embed.add_field(
-                name="💵 BST Balance",
-                value=f"**{balance:.2f} BST**",
+                name="╭─────────────────╮",
+                value=f"**𝐁𝐒𝐓 𝐁𝐚𝐥𝐚𝐧𝐜𝐞**\n```fix\n{balance:.2f} BST\n```\n╰─────────────────╯",
                 inline=False
             )
             
             embed.add_field(
-                name="📊 Progress to Next BST",
-                value=f"`{bar}` {progress_percent:.1f}%\n**{progress_to_next}/{MESSAGES_PER_BST}** messages (**{remaining_messages}** remaining)",
+                name="╭─────────────────╮",
+                value=f"**𝐏𝐫𝐨𝐠𝐫𝐞𝐬𝐬 𝐭𝐨 𝐍𝐞𝐱𝐭 𝐁𝐒𝐓**\n`{bar}` **{progress_percent:.1f}%**\n**{progress_to_next}** / **{MESSAGES_PER_BST}** (**{remaining_messages}** remaining)\n╰─────────────────╯",
                 inline=False
             )
             
-            # Weekly pool status with color coding
-            pool_emoji = "🟢" if weekly_pool >= 5.0 else "🟡" if weekly_pool >= 1.0 else "🔴"
+            # Pool status
+            pool_status = "𝐀𝐯𝐚𝐢𝐥𝐚𝐛𝐥𝐞" if weekly_pool >= 5.0 else "𝐋𝐨𝐰" if weekly_pool >= 1.0 else "𝐄𝐦𝐩𝐭𝐲"
             embed.add_field(
-                name=f"{pool_emoji} Weekly Pool Status",
-                value=f"**{weekly_pool:.2f} BST** remaining in server pool\n*Resets every Monday*",
+                name="╭─────────────────╮",
+                value=f"**𝐖𝐞𝐞𝐤𝐥𝐲 𝐏𝐨𝐨𝐥**\n**{weekly_pool:.2f} BST** • {pool_status}\n*Resets every Monday*\n╰─────────────────╯",
                 inline=False
             )
             
-            if weekly_pool < 1.0:
-                embed.add_field(
-                    name="⚠️ Pool Empty",
-                    value="Weekly pool is depleted! Wait for Monday reset.",
-                    inline=False
-                )
-            
-            embed.set_footer(text="800 messages = 1 BST • Earn from weekly pool")
+            embed.set_footer(text="━━━━━━━━━━━━━━━━━━━━━━━━━\n800 messages = 1 BST")
             
             await interaction.response.send_message(embed=embed)
             
         except Exception as e:
             print(f"Balance error: {e}")
-            await interaction.response.send_message(f"❌ Error: {str(e)}", ephemeral=True)
+            await interaction.response.send_message(f"Error: {str(e)}", ephemeral=True)
 
     @app_commands.command(name="messages", description="Check your message progress")
     @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
@@ -225,69 +200,48 @@ class Economy(commands.Cog):
             remaining_messages = MESSAGES_PER_BST - progress_to_next
             progress_percent = (progress_to_next / MESSAGES_PER_BST) * 100
             
+            # Premium wider progress bar
             filled = int(progress_percent / 2.5)
-            bar = "▓" * filled + "░" * (40 - filled)
+            bar = "▰" * filled + "▱" * (40 - filled)
             
             embed = discord.Embed(
-                title="📨 Message Progress",
+                title="━━━━━ 𝐌𝐄𝐒𝐒𝐀𝐆𝐄 𝐏𝐑𝐎𝐆𝐑𝐄𝐒𝐒 ━━━━━",
                 color=0x2B2D31
             )
             
             embed.add_field(
-                name="Progress Bar",
-                value=f"```{bar}```",
+                name="╭──────────────────────────────────────────────╮",
+                value=f"```{bar}```\n╰──────────────────────────────────────────────╯",
                 inline=False
             )
             
             embed.add_field(
-                name="📊 Stats",
-                value=f"**{progress_to_next}/{MESSAGES_PER_BST}** messages ({progress_percent:.1f}%)",
+                name="**𝐂𝐮𝐫𝐫𝐞𝐧𝐭 𝐏𝐫𝐨𝐠𝐫𝐞𝐬𝐬**",
+                value=f"**{progress_to_next}** / **{MESSAGES_PER_BST}** (**{progress_percent:.1f}%**)",
                 inline=True
             )
             
             embed.add_field(
-                name="⏳ Remaining",
-                value=f"**{remaining_messages}** messages until next BST",
+                name="**𝐑𝐞𝐦𝐚𝐢𝐧𝐢𝐧𝐠**",
+                value=f"**{remaining_messages}** messages",
                 inline=True
             )
             
-            # Calculate estimated time (assuming 10 messages per hour)
-            estimated_hours = remaining_messages / 10
-            if estimated_hours < 1:
-                time_estimate = f"{int(estimated_hours * 60)} minutes"
-            elif estimated_hours < 24:
-                time_estimate = f"{estimated_hours:.1f} hours"
-            else:
-                time_estimate = f"{estimated_hours / 24:.1f} days"
-            
+            # Pool status
+            pool_status = "𝐀𝐯𝐚𝐢𝐥𝐚𝐛𝐥𝐞" if weekly_pool >= 5.0 else "𝐋𝐨𝐰" if weekly_pool >= 1.0 else "𝐄𝐦𝐩𝐭𝐲"
             embed.add_field(
-                name="⏰ Estimated Time",
-                value=f"~{time_estimate} (at 10 msg/hr)",
+                name="╭─────────────────╮",
+                value=f"**𝐖𝐞𝐞𝐤𝐥𝐲 𝐏𝐨𝐨𝐥**\n**{weekly_pool:.2f} BST** • {pool_status}\n*Resets every Monday*\n╰─────────────────╯",
                 inline=False
             )
             
-            # Weekly pool status
-            pool_emoji = "🟢" if weekly_pool >= 5.0 else "🟡" if weekly_pool >= 1.0 else "🔴"
-            embed.add_field(
-                name=f"{pool_emoji} Weekly Pool Status",
-                value=f"**{weekly_pool:.2f} BST** remaining in server pool\n*Resets every Monday*",
-                inline=False
-            )
-            
-            if weekly_pool < 1.0:
-                embed.add_field(
-                    name="⚠️ Pool Nearly Empty",
-                    value="Weekly pool is running low! Resets Monday.",
-                    inline=False
-                )
-            
-            embed.set_footer(text="Keep chatting to earn BST from the weekly pool!")
+            embed.set_footer(text="━━━━━━━━━━━━━━━━━━━━━━━━━\nKeep chatting to earn BST")
             
             await interaction.response.send_message(embed=embed)
             
         except Exception as e:
             print(f"Messages error: {e}")
-            await interaction.response.send_message(f"❌ Error: {str(e)}", ephemeral=True)
+            await interaction.response.send_message(f"Error: {str(e)}", ephemeral=True)
 
     @app_commands.command(name="leaderboard", description="View BST leaderboard")
     @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
@@ -308,58 +262,75 @@ class Economy(commands.Cog):
             total_circulation = self.convert_decimals(total_circulation) or 0.0
             
             if not balances:
-                await interaction.response.send_message("No one has BST yet! Start chatting to earn BST.")
+                await interaction.response.send_message("No one has BST yet. Start chatting to earn BST.")
                 return
             
             embed = discord.Embed(
-                title="🏆 BST Leaderboard",
-                description="Top BST holders in the server",
+                title="━━━━━ 𝐁𝐒𝐓 𝐋𝐄𝐀𝐃𝐄𝐑𝐁𝐎𝐀𝐑𝐃 ━━━━━",
+                description="**Top BST holders in the server**",
                 color=0xFEE75C
             )
             
-            medals = ["🥇", "🥈", "🥉"]
-            
+            # Premium ranking with special fonts
             leaderboard_text = ""
-            for i, (user_id, balance) in enumerate(balances[:10], 1):
+            rank_symbols = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"]
+            
+            for i, (user_id, balance) in enumerate(balances[:10], 0):
                 member = interaction.guild.get_member(user_id)
                 if not member:
                     continue
                 
-                medal = medals[i-1] if i <= 3 else f"`#{i}`"
-                leaderboard_text += f"{medal} **{member.display_name}** — {balance:.2f} BST\n"
+                rank = rank_symbols[i] if i < 10 else f"⓫"
+                
+                # Top 3 get special formatting
+                if i == 0:
+                    leaderboard_text += f"╔═══════════════════════╗\n"
+                    leaderboard_text += f"║ {rank} **{member.display_name}** — **{balance:.2f} BST** ║\n"
+                    leaderboard_text += f"╚═══════════════════════╝\n"
+                elif i == 1:
+                    leaderboard_text += f"╔═══════════════════════╗\n"
+                    leaderboard_text += f"║ {rank} **{member.display_name}** — **{balance:.2f} BST** ║\n"
+                    leaderboard_text += f"╚═══════════════════════╝\n"
+                elif i == 2:
+                    leaderboard_text += f"╔═══════════════════════╗\n"
+                    leaderboard_text += f"║ {rank} **{member.display_name}** — **{balance:.2f} BST** ║\n"
+                    leaderboard_text += f"╚═══════════════════════╝\n"
+                else:
+                    leaderboard_text += f"{rank} **{member.display_name}** — {balance:.2f} BST\n"
             
             embed.add_field(
-                name="Top Earners",
-                value=leaderboard_text if leaderboard_text else "*No users yet*",
+                name="╭───────────────────────────╮",
+                value=f"{leaderboard_text}╰───────────────────────────╯",
                 inline=False
             )
             
-            # Economy status with color coding
-            pool_emoji = "🟢" if weekly_pool >= 5.0 else "🟡" if weekly_pool >= 1.0 else "🔴"
+            # Pool status
+            pool_status = "𝐀𝐯𝐚𝐢𝐥𝐚𝐛𝐥𝐞" if weekly_pool >= 5.0 else "𝐋𝐨𝐰" if weekly_pool >= 1.0 else "𝐄𝐦𝐩𝐭𝐲"
             
             embed.add_field(
-                name="📊 Economy Status",
+                name="╭─────────────────╮",
                 value=(
-                    f"**💰 Main Pool:** {main_pool:.2f} BST\n"
-                    f"**{pool_emoji} Weekly Pool:** {weekly_pool:.2f} BST\n"
-                    f"**💵 In Circulation:** {total_circulation:.2f} BST\n"
-                    f"**🌍 Total Supply:** {main_pool + total_circulation:.2f} BST"
+                    f"**𝐄𝐜𝐨𝐧𝐨𝐦𝐲 𝐒𝐭𝐚𝐭𝐮𝐬**\n"
+                    f"**Main Pool:** {main_pool:.2f} BST\n"
+                    f"**Weekly Pool:** {weekly_pool:.2f} BST • {pool_status}\n"
+                    f"**In Circulation:** {total_circulation:.2f} BST\n"
+                    f"**Total Supply:** {main_pool + total_circulation:.2f} BST\n"
+                    f"╰─────────────────╯"
                 ),
                 inline=False
             )
             
-            embed.set_footer(text="Earn BST by chatting • 800 msgs = 1 BST from weekly pool")
+            embed.set_footer(text="━━━━━━━━━━━━━━━━━━━━━━━━━\n800 messages = 1 BST")
             
             await interaction.response.send_message(embed=embed)
             
         except Exception as e:
             print(f"Leaderboard error: {e}")
-            await interaction.response.send_message(f"❌ Error: {str(e)}", ephemeral=True)
+            await interaction.response.send_message(f"Error: {str(e)}", ephemeral=True)
 
-    @app_commands.command(name="poolstatus", description="Check weekly pool status (Public)")
+    @app_commands.command(name="poolstatus", description="Check weekly pool status")
     @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
     async def poolstatus(self, interaction: discord.Interaction):
-        """Public command to check weekly pool status"""
         try:
             weekly_pool = await self.bot.db.get_weekly_pool()
             weekly_pool = self.convert_decimals(weekly_pool)
@@ -374,51 +345,58 @@ class Economy(commands.Cog):
                 days_until_monday = 7
             next_reset = now + timedelta(days=days_until_monday)
             
-            pool_emoji = "🟢" if weekly_pool >= 5.0 else "🟡" if weekly_pool >= 1.0 else "🔴"
+            pool_status = "𝐀𝐯𝐚𝐢𝐥𝐚𝐛𝐥𝐞" if weekly_pool >= 5.0 else "𝐋𝐨𝐰" if weekly_pool >= 1.0 else "𝐄𝐦𝐩𝐭𝐲"
+            color = 0x57F287 if weekly_pool >= 5.0 else 0xFEE75C if weekly_pool >= 1.0 else 0xED4245
             
             embed = discord.Embed(
-                title=f"{pool_emoji} Weekly Pool Status",
-                color=0x57F287 if weekly_pool >= 5.0 else 0xFEE75C if weekly_pool >= 1.0 else 0xED4245
+                title="━━━━━ 𝐏𝐎𝐎𝐋 𝐒𝐓𝐀𝐓𝐔𝐒 ━━━━━",
+                color=color
             )
             
             embed.add_field(
-                name="📅 Weekly Pool",
-                value=f"**{weekly_pool:.2f} BST** available",
+                name="╭─────────────────╮",
+                value=f"**𝐖𝐞𝐞𝐤𝐥𝐲 𝐏𝐨𝐨𝐥**\n```fix\n{weekly_pool:.2f} BST\n```\n╰─────────────────╯",
                 inline=True
             )
             
             embed.add_field(
-                name="💰 Main Pool",
-                value=f"**{main_pool:.2f} BST**",
+                name="╭─────────────────╮",
+                value=f"**𝐌𝐚𝐢𝐧 𝐏𝐨𝐨𝐥**\n```fix\n{main_pool:.2f} BST\n```\n╰─────────────────╯",
                 inline=True
             )
             
             embed.add_field(
-                name="⏰ Next Reset",
-                value=f"<t:{int(next_reset.timestamp())}:R>",
+                name="╭─────────────────╮",
+                value=f"**𝐒𝐭𝐚𝐭𝐮𝐬**\n```{pool_status}```\n╰─────────────────╯",
+                inline=True
+            )
+            
+            embed.add_field(
+                name="╭─────────────────╮",
+                value=f"**𝐍𝐞𝐱𝐭 𝐑𝐞𝐬𝐞𝐭**\n<t:{int(next_reset.timestamp())}:R>\n╰─────────────────╯",
                 inline=False
             )
             
             if weekly_pool >= 1.0:
                 embed.add_field(
-                    name="✅ Status",
-                    value=f"Weekly pool has **{int(weekly_pool)} BST** ready to be earned!",
+                    name="╭─────────────────╮",
+                    value=f"**𝐈𝐧𝐟𝐨**\nWeekly pool has **{int(weekly_pool)} BST** ready to be earned\n╰─────────────────╯",
                     inline=False
                 )
             else:
                 embed.add_field(
-                    name="⚠️ Status",
-                    value="Weekly pool is nearly empty! Wait for Monday reset.",
+                    name="╭─────────────────╮",
+                    value=f"**𝐈𝐧𝐟𝐨**\nWeekly pool is empty. Wait for Monday reset.\n╰─────────────────╯",
                     inline=False
                 )
             
-            embed.set_footer(text="Send 800 messages to earn 1 BST from weekly pool")
+            embed.set_footer(text="━━━━━━━━━━━━━━━━━━━━━━━━━\n800 messages = 1 BST from weekly pool")
             
             await interaction.response.send_message(embed=embed)
             
         except Exception as e:
             print(f"Pool status error: {e}")
-            await interaction.response.send_message(f"❌ Error: {str(e)}", ephemeral=True)
+            await interaction.response.send_message(f"Error: {str(e)}", ephemeral=True)
 
 
 async def setup(bot):
