@@ -6,24 +6,26 @@ import os
 class Admin(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        # CHANGED: Now uses Discord User ID instead of Role ID
-        self.owner_user_id = int(os.getenv('OWNER_USER_ID'))
         
-        # Parse multiple manager role IDs (this stays the same)
+        # MULTIPLE OWNER SUPPORT
+        owner_ids_str = os.getenv('OWNER_USER_IDS', '')
+        self.owner_user_ids = [int(uid.strip()) for uid in owner_ids_str.split(',') if uid.strip()]
+        
+        # Manager roles
         manager_roles_str = os.getenv('MANAGER_ROLE_ID', '')
         self.manager_role_ids = [int(role_id.strip()) for role_id in manager_roles_str.split(',') if role_id.strip()]
 
     def has_owner_role(self, interaction: discord.Interaction) -> bool:
-        """CHANGED: Check if user IS the owner by user ID"""
-        return interaction.user.id == self.owner_user_id
+        """Check if user is an owner"""
+        return interaction.user.id in self.owner_user_ids
 
     def has_manager_role(self, interaction: discord.Interaction) -> bool:
-        """Check if user has any manager role"""
+        """Check if user has manager role"""
         return any(role.id in self.manager_role_ids for role in interaction.user.roles)
 
-    # ==================== OWNER COMMANDS ====================
+    # ==================== OWNER: MAIN POOL COMMANDS ====================
 
-    @app_commands.command(name="mint", description="Mint BST into economy pool (Owner Only)")
+    @app_commands.command(name="mint", description="Mint BST into main economy pool (Owner Only)")
     @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
     async def mint(self, interaction: discord.Interaction, amount: float):
         if not self.has_owner_role(interaction):
@@ -37,14 +39,16 @@ class Admin(commands.Cog):
         try:
             new_pool = await self.bot.db.add_to_pool(amount)
             circulation = await self.bot.db.get_total_bst_in_circulation()
+            weekly_pool = await self.bot.db.get_weekly_pool()
             total_supply = new_pool + circulation
             
             embed = discord.Embed(
                 title="✅ BST Minted",
-                description=f"Minted **{amount:.2f} BST** into economy pool",
+                description=f"Minted **{amount:.2f} BST** into main economy pool",
                 color=0x57F287
             )
-            embed.add_field(name="💰 Pool Balance", value=f"**{new_pool:.2f} BST**", inline=True)
+            embed.add_field(name="💰 Main Pool", value=f"**{new_pool:.2f} BST**", inline=True)
+            embed.add_field(name="📅 Weekly Pool", value=f"**{weekly_pool:.2f} BST**", inline=True)
             embed.add_field(name="💵 In Circulation", value=f"**{circulation:.2f} BST**", inline=True)
             embed.add_field(name="🌍 Total Supply", value=f"**{total_supply:.2f} BST**", inline=False)
             
@@ -60,23 +64,21 @@ class Admin(commands.Cog):
             return
 
         try:
-            pool = await self.bot.db.get_pool_balance()
+            main_pool = await self.bot.db.get_pool_balance()
+            weekly_pool = await self.bot.db.get_weekly_pool()
             circulation = await self.bot.db.get_total_bst_in_circulation()
             users = await self.bot.db.get_user_count()
             boxes = await self.bot.db.get_total_boxes_opened()
             
-            # Get weekly distributed total
-            weekly_distributed = await self.bot.db.get_weekly_remaining()
-            
             embed = discord.Embed(title="📊 Economy Overview", color=0x5865F2)
-            embed.add_field(name="💰 Pool (Available)", value=f"{pool:.2f} BST", inline=True)
+            embed.add_field(name="💰 Main Pool", value=f"{main_pool:.2f} BST", inline=True)
+            embed.add_field(name="📅 Weekly Pool", value=f"{weekly_pool:.2f} BST", inline=True)
             embed.add_field(name="💵 In Circulation", value=f"{circulation:.2f} BST", inline=True)
-            embed.add_field(name="🌍 Total Supply", value=f"{pool + circulation:.2f} BST", inline=True)
+            embed.add_field(name="🌍 Total Supply", value=f"{main_pool + circulation:.2f} BST", inline=True)
             embed.add_field(name="👥 Users", value=f"{users}", inline=True)
             embed.add_field(name="📦 Boxes Opened", value=f"{boxes}", inline=True)
-            embed.add_field(name="📅 Weekly Distributed", value=f"{weekly_distributed:.1f} BST", inline=True)
             
-            embed.set_footer(text="Use /circulation to see who holds BST • /setpool to edit pool")
+            embed.set_footer(text="Weekly pool resets every Monday • Use /setweekly to edit")
             
             await interaction.response.send_message(embed=embed, ephemeral=True)
         except Exception as e:
@@ -96,7 +98,6 @@ class Admin(commands.Cog):
                 await interaction.response.send_message("No users have BST yet!", ephemeral=True)
                 return
             
-            # Pagination
             per_page = 15
             total_pages = (len(all_balances) + per_page - 1) // per_page
             page = max(1, min(page, total_pages))
@@ -126,14 +127,12 @@ class Admin(commands.Cog):
                 inline=False
             )
             
-            embed.set_footer(text="Use /resetuser to remove a user's BST (returns to pool)")
-            
             await interaction.response.send_message(embed=embed, ephemeral=True)
             
         except Exception as e:
             await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
 
-    @app_commands.command(name="setpool", description="Set exact pool amount (Owner Only)")
+    @app_commands.command(name="setpool", description="Set exact main pool amount (Owner Only)")
     @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
     async def setpool(self, interaction: discord.Interaction, amount: float):
         if not self.has_owner_role(interaction):
@@ -150,20 +149,19 @@ class Admin(commands.Cog):
             circulation = await self.bot.db.get_total_bst_in_circulation()
             
             embed = discord.Embed(
-                title="✅ Pool Balance Set",
-                description=f"Pool balance changed to **{amount:.2f} BST**",
+                title="✅ Main Pool Balance Set",
+                description=f"Main pool balance changed to **{amount:.2f} BST**",
                 color=0x5865F2
             )
             embed.add_field(name="📊 Previous Pool", value=f"{old_pool:.2f} BST", inline=True)
             embed.add_field(name="💰 New Pool", value=f"{amount:.2f} BST", inline=True)
             embed.add_field(name="💵 Circulation", value=f"{circulation:.2f} BST (unchanged)", inline=False)
-            embed.set_footer(text="⚠️ This only affects the pool, not user balances")
             
             await interaction.response.send_message(embed=embed, ephemeral=True)
         except Exception as e:
             await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
 
-    @app_commands.command(name="addpool", description="Add BST to pool (Owner Only)")
+    @app_commands.command(name="addpool", description="Add BST to main pool (Owner Only)")
     @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
     async def addpool(self, interaction: discord.Interaction, amount: float):
         if not self.has_owner_role(interaction):
@@ -179,19 +177,18 @@ class Admin(commands.Cog):
             circulation = await self.bot.db.get_total_bst_in_circulation()
             
             embed = discord.Embed(
-                title="✅ BST Added to Pool",
-                description=f"Added **{amount:.2f} BST** to pool",
+                title="✅ BST Added to Main Pool",
+                description=f"Added **{amount:.2f} BST** to main pool",
                 color=0x57F287
             )
             embed.add_field(name="💰 New Pool", value=f"{new_pool:.2f} BST", inline=True)
             embed.add_field(name="💵 Circulation", value=f"{circulation:.2f} BST", inline=True)
-            embed.add_field(name="🌍 Total Supply", value=f"{new_pool + circulation:.2f} BST", inline=False)
             
             await interaction.response.send_message(embed=embed, ephemeral=True)
         except Exception as e:
             await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
 
-    @app_commands.command(name="removepool", description="Remove BST from pool (Owner Only)")
+    @app_commands.command(name="removepool", description="Remove BST from main pool (Owner Only)")
     @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
     async def removepool(self, interaction: discord.Interaction, amount: float):
         if not self.has_owner_role(interaction):
@@ -207,94 +204,143 @@ class Admin(commands.Cog):
             
             if pool_balance < amount:
                 await interaction.response.send_message(
-                    f"❌ Pool only has {pool_balance:.2f} BST!",
+                    f"❌ Main pool only has {pool_balance:.2f} BST!",
                     ephemeral=True
                 )
                 return
             
             new_pool = await self.bot.db.remove_from_pool_direct(amount)
-            circulation = await self.bot.db.get_total_bst_in_circulation()
             
             embed = discord.Embed(
-                title="✅ BST Removed from Pool",
-                description=f"Removed **{amount:.2f} BST** from pool",
+                title="✅ BST Removed from Main Pool",
+                description=f"Removed **{amount:.2f} BST** from main pool",
                 color=0xFEE75C
             )
             embed.add_field(name="💰 New Pool", value=f"{new_pool:.2f} BST", inline=True)
-            embed.add_field(name="💵 Circulation", value=f"{circulation:.2f} BST (unchanged)", inline=True)
-            embed.set_footer(text="⚠️ This BST is destroyed")
             
             await interaction.response.send_message(embed=embed, ephemeral=True)
         except Exception as e:
             await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
 
-    @app_commands.command(name="resetpool", description="Reset economy pool to 0 (Owner Only)")
+    # ==================== OWNER/MANAGER: WEEKLY POOL COMMANDS ====================
+
+    @app_commands.command(name="setweekly", description="Set exact weekly pool amount (Owner/Manager)")
     @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
-    async def resetpool(self, interaction: discord.Interaction):
-        if not self.has_owner_role(interaction):
-            await interaction.response.send_message("❌ Owner permission required!", ephemeral=True)
+    async def setweekly(self, interaction: discord.Interaction, amount: float):
+        if not (self.has_owner_role(interaction) or self.has_manager_role(interaction)):
+            await interaction.response.send_message("❌ Owner/Manager permission required!", ephemeral=True)
             return
 
-        class ConfirmView(discord.ui.View):
-            def __init__(self):
-                super().__init__(timeout=30)
-                self.value = None
+        if amount < 0:
+            await interaction.response.send_message("❌ Amount cannot be negative!", ephemeral=True)
+            return
 
-            @discord.ui.button(label="⚠️ CONFIRM RESET", style=discord.ButtonStyle.danger)
-            async def confirm(self, button_int: discord.Interaction, button: discord.ui.Button):
-                self.value = True
-                self.stop()
-                await button_int.response.defer()
-
-            @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
-            async def cancel(self, button_int: discord.Interaction, button: discord.ui.Button):
-                self.value = False
-                self.stop()
-                await button_int.response.defer()
-
-        pool = await self.bot.db.get_pool_balance()
-        circulation = await self.bot.db.get_total_bst_in_circulation()
-        
-        embed = discord.Embed(
-            title="⚠️ WARNING: Reset Economy Pool",
-            description=(
-                f"This will reset the pool to **0 BST**!\n\n"
-                f"**Current Pool:** {pool:.2f} BST\n"
-                f"**In Circulation:** {circulation:.2f} BST\n\n"
-                f"**This ONLY removes BST from the pool!**\n"
-                f"**User balances will NOT be affected!**"
-            ),
-            color=0xED4245
-        )
-
-        view = ConfirmView()
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-        await view.wait()
-
-        if view.value:
-            try:
-                await self.bot.db.reset_pool()
-                await interaction.edit_original_response(
-                    content="✅ Economy pool reset to 0 BST!",
-                    embed=None,
-                    view=None
-                )
-            except Exception as e:
-                await interaction.edit_original_response(
-                    content=f"❌ Error: {e}",
-                    embed=None,
-                    view=None
-                )
-        else:
-            await interaction.edit_original_response(
-                content="❌ Reset cancelled.",
-                embed=None,
-                view=None
+        try:
+            old_weekly = await self.bot.db.get_weekly_pool()
+            await self.bot.db.set_weekly_pool(amount)
+            
+            embed = discord.Embed(
+                title="✅ Weekly Pool Set",
+                description=f"Weekly pool set to **{amount:.2f} BST**",
+                color=0x5865F2
             )
+            embed.add_field(name="📊 Previous", value=f"{old_weekly:.2f} BST", inline=True)
+            embed.add_field(name="📅 New Weekly", value=f"{amount:.2f} BST", inline=True)
+            embed.set_footer(text="Users can now earn from this pool via messages")
+            
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
+
+    @app_commands.command(name="addweekly", description="Add BST to weekly pool (Owner/Manager)")
+    @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
+    async def addweekly(self, interaction: discord.Interaction, amount: float):
+        if not (self.has_owner_role(interaction) or self.has_manager_role(interaction)):
+            await interaction.response.send_message("❌ Owner/Manager permission required!", ephemeral=True)
+            return
+
+        if amount <= 0:
+            await interaction.response.send_message("❌ Amount must be positive!", ephemeral=True)
+            return
+
+        try:
+            new_weekly = await self.bot.db.add_to_weekly_pool(amount)
+            
+            embed = discord.Embed(
+                title="✅ BST Added to Weekly Pool",
+                description=f"Added **{amount:.2f} BST** to weekly pool",
+                color=0x57F287
+            )
+            embed.add_field(name="📅 New Weekly Pool", value=f"{new_weekly:.2f} BST", inline=True)
+            
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
+
+    @app_commands.command(name="removeweekly", description="Remove BST from weekly pool (Owner/Manager)")
+    @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
+    async def removeweekly(self, interaction: discord.Interaction, amount: float):
+        if not (self.has_owner_role(interaction) or self.has_manager_role(interaction)):
+            await interaction.response.send_message("❌ Owner/Manager permission required!", ephemeral=True)
+            return
+
+        if amount <= 0:
+            await interaction.response.send_message("❌ Amount must be positive!", ephemeral=True)
+            return
+
+        try:
+            weekly_balance = await self.bot.db.get_weekly_pool()
+            
+            if weekly_balance < amount:
+                await interaction.response.send_message(
+                    f"❌ Weekly pool only has {weekly_balance:.2f} BST!",
+                    ephemeral=True
+                )
+                return
+            
+            new_weekly = await self.bot.db.remove_from_weekly_pool(amount)
+            
+            if new_weekly is None:
+                await interaction.response.send_message("❌ Failed to remove BST!", ephemeral=True)
+                return
+            
+            embed = discord.Embed(
+                title="✅ BST Removed from Weekly Pool",
+                description=f"Removed **{amount:.2f} BST** from weekly pool",
+                color=0xFEE75C
+            )
+            embed.add_field(name="📅 New Weekly Pool", value=f"{new_weekly:.2f} BST", inline=True)
+            
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
+
+    @app_commands.command(name="resetweekly", description="Reset weekly pool to default (Owner/Manager)")
+    @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
+    async def resetweekly(self, interaction: discord.Interaction, amount: float = 10.0):
+        if not (self.has_owner_role(interaction) or self.has_manager_role(interaction)):
+            await interaction.response.send_message("❌ Owner/Manager permission required!", ephemeral=True)
+            return
+
+        try:
+            old_weekly = await self.bot.db.get_weekly_pool()
+            await self.bot.db.reset_weekly_pool(amount)
+            
+            embed = discord.Embed(
+                title="✅ Weekly Pool Reset",
+                description=f"Weekly pool reset to **{amount:.2f} BST**",
+                color=0x57F287
+            )
+            embed.add_field(name="📊 Previous", value=f"{old_weekly:.2f} BST", inline=True)
+            embed.add_field(name="📅 New Weekly", value=f"{amount:.2f} BST", inline=True)
+            
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
 
     # ==================== MANAGER COMMANDS ====================
 
-    @app_commands.command(name="addbst", description="Give BST to user FROM POOL (Manager)")
+    @app_commands.command(name="addbst", description="Give BST to user FROM MAIN POOL (Manager)")
     @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
     async def addbst(self, interaction: discord.Interaction, user: discord.Member, amount: float):
         if not self.has_manager_role(interaction):
@@ -309,24 +355,10 @@ class Admin(commands.Cog):
             pool_balance = await self.bot.db.get_pool_balance()
             
             if pool_balance < amount:
-                embed = discord.Embed(
-                    title="❌ Insufficient Pool Balance",
-                    description=f"Cannot add **{amount:.2f} BST** to {user.mention}",
-                    color=0xED4245
+                await interaction.response.send_message(
+                    f"❌ Main pool only has {pool_balance:.2f} BST!",
+                    ephemeral=True
                 )
-                embed.add_field(
-                    name="💰 Pool Balance",
-                    value=f"**{pool_balance:.2f} BST** available",
-                    inline=True
-                )
-                embed.add_field(
-                    name="❌ Short By",
-                    value=f"**{amount - pool_balance:.2f} BST**",
-                    inline=True
-                )
-                embed.set_footer(text="Ask owner to mint more BST!")
-                
-                await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
             
             success = await self.bot.db.add_bst(user.id, amount)
@@ -350,7 +382,7 @@ class Admin(commands.Cog):
         except Exception as e:
             await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
 
-    @app_commands.command(name="removebst", description="Remove BST from user and RETURN TO POOL (Manager)")
+    @app_commands.command(name="removebst", description="Remove BST from user and RETURN TO MAIN POOL (Manager)")
     @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
     async def removebst(self, interaction: discord.Interaction, user: discord.Member, amount: float):
         if not self.has_manager_role(interaction):
@@ -386,8 +418,7 @@ class Admin(commands.Cog):
                 color=0x57F287
             )
             embed.add_field(name="💰 User Balance", value=f"{new_balance:.2f} BST", inline=True)
-            embed.add_field(name="♻️ Returned to Pool", value=f"{new_pool:.2f} BST", inline=True)
-            embed.set_footer(text="✅ BST returned to pool")
+            embed.add_field(name="♻️ Returned to Main Pool", value=f"{new_pool:.2f} BST", inline=True)
             
             await interaction.response.send_message(embed=embed, ephemeral=True)
         except Exception as e:
@@ -415,13 +446,12 @@ class Admin(commands.Cog):
             )
             embed.add_field(name="📊 Previous", value=f"{old_balance:.2f} BST", inline=True)
             embed.add_field(name="💰 New", value=f"{amount:.2f} BST", inline=True)
-            embed.set_footer(text="⚠️ This bypasses the pool system")
             
             await interaction.response.send_message(embed=embed, ephemeral=True)
         except Exception as e:
             await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
 
-    @app_commands.command(name="resetuser", description="Reset user's BST to 0 and RETURN TO POOL (Manager)")
+    @app_commands.command(name="resetuser", description="Reset user's BST to 0 and RETURN TO MAIN POOL (Manager)")
     @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
     async def resetuser(self, interaction: discord.Interaction, user: discord.Member):
         if not self.has_manager_role(interaction):
@@ -445,7 +475,6 @@ class Admin(commands.Cog):
                 return
             
             new_pool = await self.bot.db.get_pool_balance()
-            circulation = await self.bot.db.get_total_bst_in_circulation()
             
             embed = discord.Embed(
                 title="✅ User Reset",
@@ -453,10 +482,8 @@ class Admin(commands.Cog):
                 color=0x57F287
             )
             embed.add_field(name="📊 Previous Balance", value=f"{old_balance:.2f} BST", inline=True)
-            embed.add_field(name="♻️ Returned to Pool", value=f"{old_balance:.2f} BST", inline=True)
-            embed.add_field(name="💰 New Pool Balance", value=f"{new_pool:.2f} BST", inline=False)
-            embed.add_field(name="💵 New Circulation", value=f"{circulation:.2f} BST", inline=True)
-            embed.set_footer(text="✅ BST returned to economy pool")
+            embed.add_field(name="♻️ Returned to Main Pool", value=f"{old_balance:.2f} BST", inline=True)
+            embed.add_field(name="💰 New Main Pool", value=f"{new_pool:.2f} BST", inline=False)
             
             await interaction.response.send_message(embed=embed, ephemeral=True)
         except Exception as e:
@@ -464,7 +491,7 @@ class Admin(commands.Cog):
 
     # ==================== INVENTORY MANAGEMENT ====================
 
-    @app_commands.command(name="removeitem", description="Remove specific item from user's inventory (Manager)")
+    @app_commands.command(name="removeitem", description="Remove item from inventory (Manager)")
     @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
     async def removeitem(self, interaction: discord.Interaction, user: discord.Member, item_name: str, quantity: int = 1):
         if not self.has_manager_role(interaction):
@@ -486,14 +513,14 @@ class Admin(commands.Cog):
             
             if not item_found:
                 await interaction.response.send_message(
-                    f"❌ {user.mention} doesn't have **{item_name}** in their inventory!",
+                    f"❌ {user.mention} doesn't have **{item_name}**!",
                     ephemeral=True
                 )
                 return
             
             if item_found['quantity'] < quantity:
                 await interaction.response.send_message(
-                    f"❌ {user.mention} only has **{item_found['quantity']}x {item_name}** (trying to remove {quantity})",
+                    f"❌ {user.mention} only has **{item_found['quantity']}x {item_name}**",
                     ephemeral=True
                 )
                 return
@@ -506,7 +533,7 @@ class Admin(commands.Cog):
             
             embed = discord.Embed(
                 title="✅ Item Removed",
-                description=f"Removed **{quantity}x {item_name}** from {user.mention}'s inventory",
+                description=f"Removed **{quantity}x {item_name}** from {user.mention}",
                 color=0xFEE75C
             )
             
@@ -514,14 +541,14 @@ class Admin(commands.Cog):
             if remaining > 0:
                 embed.add_field(name="📦 Remaining", value=f"{remaining}x {item_name}", inline=True)
             else:
-                embed.add_field(name="📦 Status", value="Item completely removed", inline=True)
+                embed.add_field(name="📦 Status", value="Item removed completely", inline=True)
             
             await interaction.response.send_message(embed=embed, ephemeral=True)
             
         except Exception as e:
             await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
 
-    @app_commands.command(name="resetinventory", description="Clear ALL items from user's inventory (Manager)")
+    @app_commands.command(name="resetinventory", description="Clear ALL items from inventory (Manager)")
     @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
     async def resetinventory(self, interaction: discord.Interaction, user: discord.Member):
         if not self.has_manager_role(interaction):
@@ -533,7 +560,7 @@ class Admin(commands.Cog):
             
             if not inventory['items']:
                 await interaction.response.send_message(
-                    f"❌ {user.mention} has no items in their inventory!",
+                    f"❌ {user.mention} has no items!",
                     ephemeral=True
                 )
                 return
@@ -614,6 +641,70 @@ class Admin(commands.Cog):
                 
         except Exception as e:
             await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
+
+    @app_commands.command(name="resetpool", description="Reset main economy pool to 0 (Owner Only)")
+    @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
+    async def resetpool(self, interaction: discord.Interaction):
+        if not self.has_owner_role(interaction):
+            await interaction.response.send_message("❌ Owner permission required!", ephemeral=True)
+            return
+
+        class ConfirmView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=30)
+                self.value = None
+
+            @discord.ui.button(label="⚠️ CONFIRM RESET", style=discord.ButtonStyle.danger)
+            async def confirm(self, button_int: discord.Interaction, button: discord.ui.Button):
+                self.value = True
+                self.stop()
+                await button_int.response.defer()
+
+            @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+            async def cancel(self, button_int: discord.Interaction, button: discord.ui.Button):
+                self.value = False
+                self.stop()
+                await button_int.response.defer()
+
+        pool = await self.bot.db.get_pool_balance()
+        circulation = await self.bot.db.get_total_bst_in_circulation()
+        
+        embed = discord.Embed(
+            title="⚠️ WARNING: Reset Main Economy Pool",
+            description=(
+                f"This will reset the main pool to **0 BST**!\n\n"
+                f"**Current Main Pool:** {pool:.2f} BST\n"
+                f"**In Circulation:** {circulation:.2f} BST\n\n"
+                f"**This ONLY removes BST from the main pool!**\n"
+                f"**User balances will NOT be affected!**"
+            ),
+            color=0xED4245
+        )
+
+        view = ConfirmView()
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await view.wait()
+
+        if view.value:
+            try:
+                await self.bot.db.reset_pool()
+                await interaction.edit_original_response(
+                    content="✅ Main economy pool reset to 0 BST!",
+                    embed=None,
+                    view=None
+                )
+            except Exception as e:
+                await interaction.edit_original_response(
+                    content=f"❌ Error: {e}",
+                    embed=None,
+                    view=None
+                )
+        else:
+            await interaction.edit_original_response(
+                content="❌ Reset cancelled.",
+                embed=None,
+                view=None
+            )
 
 
 async def setup(bot):
