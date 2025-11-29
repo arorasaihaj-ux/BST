@@ -50,19 +50,15 @@ class Admin(commands.Cog):
             embed.add_field(name="💰 Main Pool", value=f"**{new_pool:.2f} BST**", inline=True)
             embed.add_field(name="📅 Weekly Pool", value=f"**{weekly_pool:.2f} BST**", inline=True)
             embed.add_field(name="💵 In Circulation", value=f"**{circulation:.2f} BST**", inline=True)
-            embed.add_field(name="🌍 Total Supply", value=f"**{total_supply:.2f} BST**", inline=False)
+            embed.add_field(name="🌐 Total Supply", value=f"**{total_supply:.2f} BST**", inline=False)
             
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.response.send_message(embed=embed)
         except Exception as e:
             await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
 
-    @app_commands.command(name="pool", description="View detailed economy stats (Owner Only)")
+    @app_commands.command(name="pool", description="View detailed economy stats")
     @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
     async def pool(self, interaction: discord.Interaction):
-        if not self.has_owner_role(interaction):
-            await interaction.response.send_message("❌ Owner permission required!", ephemeral=True)
-            return
-
         try:
             main_pool = await self.bot.db.get_pool_balance()
             weekly_pool = await self.bot.db.get_weekly_pool()
@@ -74,13 +70,13 @@ class Admin(commands.Cog):
             embed.add_field(name="💰 Main Pool", value=f"{main_pool:.2f} BST", inline=True)
             embed.add_field(name="📅 Weekly Pool", value=f"{weekly_pool:.2f} BST", inline=True)
             embed.add_field(name="💵 In Circulation", value=f"{circulation:.2f} BST", inline=True)
-            embed.add_field(name="🌍 Total Supply", value=f"{main_pool + circulation:.2f} BST", inline=True)
+            embed.add_field(name="🌐 Total Supply", value=f"{main_pool + circulation:.2f} BST", inline=True)
             embed.add_field(name="👥 Users", value=f"{users}", inline=True)
             embed.add_field(name="📦 Boxes Opened", value=f"{boxes}", inline=True)
             
-            embed.set_footer(text="Weekly pool resets every Monday • Use /setweekly to edit")
+            embed.set_footer(text="Weekly pool resets every Monday")
             
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.response.send_message(embed=embed)
         except Exception as e:
             await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
 
@@ -705,7 +701,6 @@ class Admin(commands.Cog):
                 embed=None,
                 view=None
             )
-
 
 async def setup(bot):
     await bot.add_cog(Admin(bot))
