@@ -567,5 +567,269 @@ class Admin(commands.Cog):
             await interaction.response.send_message(f"**𝐄𝐑𝐑𝐎𝐑**\n{e}", ephemeral=True)
 
 
+# ==================== ADD THESE TO admin.py ====================
+# Add to the Admin class in admin.py
+
+    @app_commands.command(name="setpool", description="Set main pool to exact amount")
+    @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
+    async def setpool(self, interaction: discord.Interaction, amount: float):
+        if not self.has_owner_role(interaction):
+            await interaction.response.send_message("**𝐎𝐖𝐍𝐄𝐑 𝐎𝐍𝐋𝐘**", ephemeral=True)
+            return
+
+        if amount < 0:
+            await interaction.response.send_message("**𝐈𝐍𝐕𝐀𝐋𝐈𝐃 𝐀𝐌𝐎𝐔𝐍𝐓**", ephemeral=True)
+            return
+
+        try:
+            old_pool = await self.bot.db.get_pool_balance()
+            await self.bot.db.set_pool_balance(amount)
+            
+            embed = discord.Embed(
+                title="𝐌𝐀𝐈𝐍 𝐏𝐎𝐎𝐋 𝐒𝐄𝐓",
+                description=f"**𝐏𝐫𝐞𝐯𝐢𝐨𝐮𝐬:** {old_pool:.2f} 𝐁𝐒𝐓\n**𝐍𝐞𝐰:** {amount:.2f} 𝐁𝐒𝐓",
+                color=0x2B2D31
+            )
+            
+            await interaction.response.send_message(embed=embed)
+        except Exception as e:
+            await interaction.response.send_message(f"**𝐄𝐑𝐑𝐎𝐑**\n{e}", ephemeral=True)
+
+    @app_commands.command(name="removepool", description="Remove BST from main pool")
+    @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
+    async def removepool(self, interaction: discord.Interaction, amount: float):
+        if not self.has_owner_role(interaction):
+            await interaction.response.send_message("**𝐎𝐖𝐍𝐄𝐑 𝐎𝐍𝐋𝐘**", ephemeral=True)
+            return
+
+        if amount <= 0:
+            await interaction.response.send_message("**𝐈𝐍𝐕𝐀𝐋𝐈𝐃 𝐀𝐌𝐎𝐔𝐍𝐓**", ephemeral=True)
+            return
+
+        try:
+            pool_balance = await self.bot.db.get_pool_balance()
+            
+            if pool_balance < amount:
+                await interaction.response.send_message(
+                    f"**𝐈𝐍𝐒𝐔𝐅𝐅𝐈𝐂𝐈𝐄𝐍𝐓**\n{pool_balance:.2f} 𝐁𝐒𝐓 𝐚𝐯𝐚𝐢𝐥𝐚𝐛𝐥𝐞",
+                    ephemeral=True
+                )
+                return
+            
+            new_pool = await self.bot.db.remove_from_pool_direct(amount)
+            
+            embed = discord.Embed(
+                title="𝐏𝐎𝐎𝐋 𝐑𝐄𝐃𝐔𝐂𝐄𝐃",
+                description=f"**𝐑𝐞𝐦𝐨𝐯𝐞𝐝:** {amount:.2f} 𝐁𝐒𝐓\n**𝐍𝐞𝐰 𝐏𝐨𝐨𝐥:** {new_pool:.2f} 𝐁𝐒𝐓",
+                color=0x2B2D31
+            )
+            
+            await interaction.response.send_message(embed=embed)
+        except Exception as e:
+            await interaction.response.send_message(f"**𝐄𝐑𝐑𝐎𝐑**\n{e}", ephemeral=True)
+
+    @app_commands.command(name="burn", description="Burn BST from circulation")
+    @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
+    async def burn(self, interaction: discord.Interaction, user: discord.Member, amount: float):
+        if not self.has_owner_role(interaction):
+            await interaction.response.send_message("**𝐎𝐖𝐍𝐄𝐑 𝐎𝐍𝐋𝐘**", ephemeral=True)
+            return
+
+        if amount <= 0:
+            await interaction.response.send_message("**𝐈𝐍𝐕𝐀𝐋𝐈𝐃 𝐀𝐌𝐎𝐔𝐍𝐓**", ephemeral=True)
+            return
+
+        try:
+            balance = await self.bot.db.get_balance(user.id)
+            
+            if balance < amount:
+                await interaction.response.send_message(
+                    f"**𝐈𝐍𝐒𝐔𝐅𝐅𝐈𝐂𝐈𝐄𝐍𝐓**\n{user.mention} 𝐡𝐚𝐬 {balance:.2f} 𝐁𝐒𝐓",
+                    ephemeral=True
+                )
+                return
+            
+            # Remove BST without returning to pool (BURN)
+            await self.bot.db.set_bst(user.id, balance - amount)
+            
+            new_balance = await self.bot.db.get_balance(user.id)
+            circulation = await self.bot.db.get_total_bst_in_circulation()
+            
+            embed = discord.Embed(
+                title="𝐁𝐒𝐓 𝐁𝐔𝐑𝐍𝐄𝐃",
+                description=f"**𝐔𝐬𝐞𝐫:** {user.mention}\n**𝐁𝐮𝐫𝐧𝐞𝐝:** {amount:.2f} 𝐁𝐒𝐓\n**𝐍𝐞𝐰 𝐁𝐚𝐥𝐚𝐧𝐜𝐞:** {new_balance:.2f} 𝐁𝐒𝐓\n**𝐂𝐢𝐫𝐜𝐮𝐥𝐚𝐭𝐢𝐨𝐧:** {circulation:.2f} 𝐁𝐒𝐓",
+                color=0x2B2D31
+            )
+            
+            await interaction.response.send_message(embed=embed)
+        except Exception as e:
+            await interaction.response.send_message(f"**𝐄𝐑𝐑𝐎𝐑**\n{e}", ephemeral=True)
+
+    @app_commands.command(name="burnuid", description="Burn BST using UID")
+    @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
+    async def burnuid(self, interaction: discord.Interaction, user_id: str, amount: float):
+        if not self.has_owner_role(interaction):
+            await interaction.response.send_message("**𝐎𝐖𝐍𝐄𝐑 𝐎𝐍𝐋𝐘**", ephemeral=True)
+            return
+
+        if amount <= 0:
+            await interaction.response.send_message("**𝐈𝐍𝐕𝐀𝐋𝐈𝐃 𝐀𝐌𝐎𝐔𝐍𝐓**", ephemeral=True)
+            return
+
+        try:
+            uid = int(user_id)
+            balance = await self.bot.db.get_balance(uid)
+            
+            if balance < amount:
+                await interaction.response.send_message(
+                    f"**𝐈𝐍𝐒𝐔𝐅𝐅𝐈𝐂𝐈𝐄𝐍𝐓**\n𝐔𝐈𝐃 {uid} 𝐡𝐚𝐬 {balance:.2f} 𝐁𝐒𝐓",
+                    ephemeral=True
+                )
+                return
+            
+            # Remove BST without returning to pool (BURN)
+            await self.bot.db.set_bst(uid, balance - amount)
+            
+            new_balance = await self.bot.db.get_balance(uid)
+            circulation = await self.bot.db.get_total_bst_in_circulation()
+            
+            embed = discord.Embed(
+                title="𝐁𝐒𝐓 𝐁𝐔𝐑𝐍𝐄𝐃",
+                description=f"**𝐔𝐈𝐃:** {uid}\n**𝐁𝐮𝐫𝐧𝐞𝐝:** {amount:.2f} 𝐁𝐒𝐓\n**𝐍𝐞𝐰 𝐁𝐚𝐥𝐚𝐧𝐜𝐞:** {new_balance:.2f} 𝐁𝐒𝐓\n**𝐂𝐢𝐫𝐜𝐮𝐥𝐚𝐭𝐢𝐨𝐧:** {circulation:.2f} 𝐁𝐒𝐓",
+                color=0x2B2D31
+            )
+            
+            await interaction.response.send_message(embed=embed)
+        except ValueError:
+            await interaction.response.send_message("**𝐈𝐍𝐕𝐀𝐋𝐈𝐃 𝐔𝐈𝐃**", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"**𝐄𝐑𝐑𝐎𝐑**\n{e}", ephemeral=True)
+
+    @app_commands.command(name="transfer", description="Transfer BST between pools")
+    @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
+    async def transfer(self, interaction: discord.Interaction, from_pool: int, to_pool: int, amount: float):
+        if not self.has_owner_role(interaction):
+            await interaction.response.send_message("**𝐎𝐖𝐍𝐄𝐑 𝐎𝐍𝐋𝐘**", ephemeral=True)
+            return
+
+        if from_pool not in [1, 2] or to_pool not in [1, 2]:
+            await interaction.response.send_message(
+                "**𝐈𝐍𝐕𝐀𝐋𝐈𝐃 𝐏𝐎𝐎𝐋**\n𝐔𝐬𝐞 1 𝐟𝐨𝐫 𝐦𝐚𝐢𝐧 𝐩𝐨𝐨𝐥 𝐨𝐫 2 𝐟𝐨𝐫 𝐰𝐞𝐞𝐤𝐥𝐲",
+                ephemeral=True
+            )
+            return
+
+        if from_pool == to_pool:
+            await interaction.response.send_message("**𝐂𝐀𝐍𝐍𝐎𝐓 𝐓𝐑𝐀𝐍𝐒𝐅𝐄𝐑 𝐓𝐎 𝐒𝐀𝐌𝐄 𝐏𝐎𝐎𝐋**", ephemeral=True)
+            return
+
+        if amount <= 0:
+            await interaction.response.send_message("**𝐈𝐍𝐕𝐀𝐋𝐈𝐃 𝐀𝐌𝐎𝐔𝐍𝐓**", ephemeral=True)
+            return
+
+        try:
+            success = await self.bot.db.transfer_between_pools(from_pool, to_pool, amount)
+            
+            if not success:
+                await interaction.response.send_message("**𝐈𝐍𝐒𝐔𝐅𝐅𝐈𝐂𝐈𝐄𝐍𝐓 𝐁𝐀𝐋𝐀𝐍𝐂𝐄**", ephemeral=True)
+                return
+            
+            pools = await self.bot.db.get_both_pools()
+            
+            pool_names = {1: "𝐌𝐚𝐢𝐧 𝐏𝐨𝐨𝐥", 2: "𝐖𝐞𝐞𝐤𝐥𝐲 𝐏𝐨𝐨𝐥"}
+            
+            embed = discord.Embed(
+                title="𝐓𝐑𝐀𝐍𝐒𝐅𝐄𝐑 𝐂𝐎𝐌𝐏𝐋𝐄𝐓𝐄",
+                description=f"**𝐅𝐫𝐨𝐦:** {pool_names[from_pool]}\n**𝐓𝐨:** {pool_names[to_pool]}\n**𝐀𝐦𝐨𝐮𝐧𝐭:** {amount:.2f} 𝐁𝐒𝐓\n\n**𝐌𝐚𝐢𝐧 𝐏𝐨𝐨𝐥:** {pools['main_pool']:.2f} 𝐁𝐒𝐓\n**𝐖𝐞𝐞𝐤𝐥𝐲 𝐏𝐨𝐨𝐥:** {pools['weekly_pool']:.2f} 𝐁𝐒𝐓",
+                color=0x2B2D31
+            )
+            
+            await interaction.response.send_message(embed=embed)
+        except Exception as e:
+            await interaction.response.send_message(f"**𝐄𝐑𝐑𝐎𝐑**\n{e}", ephemeral=True)
+
+    @app_commands.command(name="economy", description="Full economy overview")
+    @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
+    async def economy(self, interaction: discord.Interaction):
+        if not self.has_owner_role(interaction):
+            await interaction.response.send_message("**𝐎𝐖𝐍𝐄𝐑 𝐎𝐍𝐋𝐘**", ephemeral=True)
+            return
+
+        try:
+            stats = await self.bot.db.get_economy_stats()
+            
+            embed = discord.Embed(
+                title="𝐄𝐂𝐎𝐍𝐎𝐌𝐘 𝐒𝐓𝐀𝐓𝐈𝐒𝐓𝐈𝐂𝐒",
+                description=f"**𝐌𝐚𝐢𝐧 𝐏𝐨𝐨𝐥:** {stats['main_pool']:.2f} 𝐁𝐒𝐓\n**𝐖𝐞𝐞𝐤𝐥𝐲 𝐏𝐨𝐨𝐥:** {stats['weekly_pool']:.2f} 𝐁𝐒𝐓\n**𝐂𝐢𝐫𝐜𝐮𝐥𝐚𝐭𝐢𝐨𝐧:** {stats['circulation']:.2f} 𝐁𝐒𝐓\n**𝐓𝐨𝐭𝐚𝐥 𝐒𝐮𝐩𝐩𝐥𝐲:** {stats['total_supply']:.2f} 𝐁𝐒𝐓\n**𝐔𝐬𝐞𝐫𝐬:** {stats['user_count']}\n**𝐁𝐨𝐱𝐞𝐬 𝐎𝐩𝐞𝐧𝐞𝐝:** {stats['boxes_opened']}",
+                color=0x2B2D31
+            )
+            
+            await interaction.response.send_message(embed=embed)
+        except Exception as e:
+            await interaction.response.send_message(f"**𝐄𝐑𝐑𝐎𝐑**\n{e}", ephemeral=True)
+
+    @app_commands.command(name="forcetransfer", description="Force transfer BST between users")
+    @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
+    async def forcetransfer(self, interaction: discord.Interaction, from_user: discord.Member, to_user: discord.Member, amount: float):
+        if not self.has_owner_role(interaction):
+            await interaction.response.send_message("**𝐎𝐖𝐍𝐄𝐑 𝐎𝐍𝐋𝐘**", ephemeral=True)
+            return
+
+        if amount <= 0:
+            await interaction.response.send_message("**𝐈𝐍𝐕𝐀𝐋𝐈𝐃 𝐀𝐌𝐎𝐔𝐍𝐓**", ephemeral=True)
+            return
+
+        try:
+            from_balance = await self.bot.db.get_balance(from_user.id)
+            
+            if from_balance < amount:
+                await interaction.response.send_message(
+                    f"**𝐈𝐍𝐒𝐔𝐅𝐅𝐈𝐂𝐈𝐄𝐍𝐓**\n{from_user.mention} 𝐡𝐚𝐬 {from_balance:.2f} 𝐁𝐒𝐓",
+                    ephemeral=True
+                )
+                return
+            
+            # Remove from sender
+            await self.bot.db.set_bst(from_user.id, from_balance - amount)
+            
+            # Add to receiver
+            to_balance = await self.bot.db.get_balance(to_user.id)
+            await self.bot.db.set_bst(to_user.id, to_balance + amount)
+            
+            new_from = await self.bot.db.get_balance(from_user.id)
+            new_to = await self.bot.db.get_balance(to_user.id)
+            
+            embed = discord.Embed(
+                title="𝐅𝐎𝐑𝐂𝐄 𝐓𝐑𝐀𝐍𝐒𝐅𝐄𝐑",
+                description=f"**𝐅𝐫𝐨𝐦:** {from_user.mention}\n**𝐓𝐨:** {to_user.mention}\n**𝐀𝐦𝐨𝐮𝐧𝐭:** {amount:.2f} 𝐁𝐒𝐓\n\n**{from_user.display_name}:** {new_from:.2f} 𝐁𝐒𝐓\n**{to_user.display_name}:** {new_to:.2f} 𝐁𝐒𝐓",
+                color=0x2B2D31
+            )
+            
+            await interaction.response.send_message(embed=embed)
+        except Exception as e:
+            await interaction.response.send_message(f"**𝐄𝐑𝐑𝐎𝐑**\n{e}", ephemeral=True)
+
+    @app_commands.command(name="resetpool", description="Reset main pool to 0")
+    @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
+    async def resetpool(self, interaction: discord.Interaction):
+        if not self.has_owner_role(interaction):
+            await interaction.response.send_message("**𝐎𝐖𝐍𝐄𝐑 𝐎𝐍𝐋𝐘**", ephemeral=True)
+            return
+
+        try:
+            old_pool = await self.bot.db.get_pool_balance()
+            await self.bot.db.reset_pool()
+            
+            embed = discord.Embed(
+                title="𝐏𝐎𝐎𝐋 𝐑𝐄𝐒𝐄𝐓",
+                description=f"**𝐏𝐫𝐞𝐯𝐢𝐨𝐮𝐬:** {old_pool:.2f} 𝐁𝐒𝐓\n**𝐍𝐞𝐰:** 0.00 𝐁𝐒𝐓",
+                color=0x2B2D31
+            )
+            
+            await interaction.response.send_message(embed=embed)
+        except Exception as e:
+            await interaction.response.send_message(f"**𝐄𝐑𝐑𝐎𝐑**\n{e}", ephemeral=True)
+
+
 async def setup(bot):
     await bot.add_cog(Admin(bot))
