@@ -4,80 +4,130 @@ from discord import app_commands
 import random
 import os
 
-# Box configurations with UPDATED RIGGED REWARDS
+# 4 BOX CONFIGURATION - RIGGED SYSTEM
 BOX_CONFIG = {
-    'base': {
-        'name': 'Base Mystery Box',
+    'box_1': {
+        'name': '𝟏 𝐁𝐒𝐓 𝐁𝐎𝐗',
         'cost': 1.0,
-        'color': 0x5865F2,  # Discord Blurple
-        # What players see (DISPLAYED)
+        'color': 0x2B2D31,
         'display_drops': [
-            ("Taco Block", "40%"),
-            ("Los Lucky Block", "30%"),
-            ("40 Robux", "20%"),
-            ("Ques Croc", "7.5%"),
-            ("67", "2.5%")
+            ("1 Lucky Block", "50%"),
+            ("3 Lucky Blocks", "30%"),
+            ("Spaghetti Tualeti", "15%"),
+            ("Garama", "4%"),
+            ("Rainbow Garama", "1%")
         ],
-        # UPDATED ACTUAL RIGGED ODDS (item, weight)
         'actual_drops': [
-            ("Taco Block", 50.0),        # 50%
-            ("Los Lucky Block", 45.0),   # 45%
-            ("40 Robux", 4.0),           # 4%
-            ("Ques Croc", 1.0),          # 1%
-            ("67", 0.0)                  # 0% (impossible to get)
+            ("1 Lucky Block", 80.0),
+            ("3 Lucky Blocks", 20.0),
+            ("Spaghetti Tualeti", 0.0),
+            ("Garama", 0.0),
+            ("Rainbow Garama", 0.0)
         ]
     },
-    'gold': {
-        'name': 'Gold Mystery Box',
+    'box_2': {
+        'name': '𝟐.𝟓 𝐁𝐒𝐓 𝐁𝐎𝐗',
         'cost': 2.5,
-        'color': 0xFEE75C,  # Gold
-        # What players see (DISPLAYED)
+        'color': 0x2B2D31,
         'display_drops': [
-            ("3x Los Lucky Block", "40%"),
-            ("80 Robux", "25%"),
-            ("Miet Bike", "20%"),
-            ("La Combination", "10.5%"),
-            ("La Grande Combi", "3.5%"),
-            ("400 Robux", "1%")
+            ("2 Lucky Blocks", "50%"),
+            ("5 Lucky Blocks", "30%"),
+            ("Money Money Puggy", "15%"),
+            ("Rainbow Garama", "4%"),
+            ("3 Rainbow Garama", "1%")
         ],
-        # UPDATED ACTUAL RIGGED ODDS
         'actual_drops': [
-            ("3x Los Lucky Block", 50.0),  # 50%
-            ("80 Robux", 45.0),             # 45%
-            ("Miet Bike", 4.0),             # 4%
-            ("La Combination", 1.0),        # 1%
-            ("La Grande Combi", 0.0),       # 0% (impossible)
-            ("400 Robux", 0.0)              # 0% (impossible)
+            ("2 Lucky Blocks", 80.0),
+            ("5 Lucky Blocks", 20.0),
+            ("Money Money Puggy", 0.0),
+            ("Rainbow Garama", 0.0),
+            ("3 Rainbow Garama", 0.0)
+        ]
+    },
+    'box_3': {
+        'name': '𝟓 𝐁𝐒𝐓 𝐁𝐎𝐗',
+        'cost': 5.0,
+        'color': 0x2B2D31,
+        'display_drops': [
+            ("200 Robux", "50%"),
+            ("Tang Tang", "30%"),
+            ("2 Base Garama", "15%"),
+            ("3 Rainbow Garama", "4%"),
+            ("Dragon", "1%")
+        ],
+        'actual_drops': [
+            ("200 Robux", 100.0),
+            ("Tang Tang", 0.0),
+            ("2 Base Garama", 0.0),
+            ("3 Rainbow Garama", 0.0),
+            ("Dragon", 0.0)
+        ]
+    },
+    'box_4': {
+        'name': '𝟏𝟎 𝐁𝐒𝐓 𝐁𝐎𝐗',
+        'cost': 10.0,
+        'color': 0x2B2D31,
+        'display_drops': [
+            ("500 Robux", "50%"),
+            ("2 Tang Tang", "30%"),
+            ("Garama", "15%"),
+            ("Dragon", "4%"),
+            ("Traited/RB Dragon", "1%")
+        ],
+        'actual_drops': [
+            ("500 Robux", 100.0),
+            ("2 Tang Tang", 0.0),
+            ("Garama", 0.0),
+            ("Dragon", 0.0),
+            ("Traited/RB Dragon", 0.0)
         ]
     }
 }
 
 class PremiumBoxView(discord.ui.View):
-    """Premium box purchase and opening interface"""
+    """Box purchase and opening interface"""
     def __init__(self):
         super().__init__(timeout=None)
     
     @discord.ui.button(
-        label="Base Box",
+        label="𝟏 𝐁𝐒𝐓",
+        style=discord.ButtonStyle.secondary,
+        custom_id="buy_box_1",
+        row=0
+    )
+    async def buy_box1(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.purchase_box(interaction, 'box_1')
+    
+    @discord.ui.button(
+        label="𝟐.𝟓 𝐁𝐒𝐓",
+        style=discord.ButtonStyle.secondary,
+        custom_id="buy_box_2",
+        row=0
+    )
+    async def buy_box2(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.purchase_box(interaction, 'box_2')
+    
+    @discord.ui.button(
+        label="𝟓 𝐁𝐒𝐓",
+        style=discord.ButtonStyle.secondary,
+        custom_id="buy_box_3",
+        row=0
+    )
+    async def buy_box3(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.purchase_box(interaction, 'box_3')
+    
+    @discord.ui.button(
+        label="𝟏𝟎 𝐁𝐒𝐓",
+        style=discord.ButtonStyle.secondary,
+        custom_id="buy_box_4",
+        row=0
+    )
+    async def buy_box4(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.purchase_box(interaction, 'box_4')
+    
+    @discord.ui.button(
+        label="𝐎𝐏𝐄𝐍 𝐁𝐎𝐗",
         style=discord.ButtonStyle.primary,
-        custom_id="buy_base_box",
-        row=0
-    )
-    async def buy_base(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.purchase_box(interaction, 'base')
-    
-    @discord.ui.button(
-        label="Gold Box",
-        style=discord.ButtonStyle.success,
-        custom_id="buy_gold_box",
-        row=0
-    )
-    async def buy_gold(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.purchase_box(interaction, 'gold')
-    
-    @discord.ui.button(
-        label="Open Box",
-        style=discord.ButtonStyle.danger,
         custom_id="open_any_box",
         row=1
     )
@@ -87,22 +137,22 @@ class PremiumBoxView(discord.ui.View):
             
             if not boxes:
                 embed = discord.Embed(
-                    description="You don't have any boxes to open. Purchase one above!",
-                    color=0xED4245
+                    description="**𝐍𝐎 𝐁𝐎𝐗𝐄𝐒**\n𝐏𝐮𝐫𝐜𝐡𝐚𝐬𝐞 𝐚 𝐛𝐨𝐱 𝐚𝐛𝐨𝐯𝐞",
+                    color=0x2B2D31
                 )
                 await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
             
             view = BoxSelectionView(boxes)
             embed = discord.Embed(
-                title="Select Box to Open",
-                description="Choose which box you want to open from your inventory",
-                color=0x5865F2
+                title="𝐒𝐄𝐋𝐄𝐂𝐓 𝐁𝐎𝐗",
+                description="𝐂𝐡𝐨𝐨𝐬𝐞 𝐚 𝐛𝐨𝐱 𝐭𝐨 𝐨𝐩𝐞𝐧",
+                color=0x2B2D31
             )
             
             await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         except Exception as e:
-            await interaction.response.send_message(f"Error: {str(e)}", ephemeral=True)
+            await interaction.response.send_message(f"**𝐄𝐑𝐑𝐎𝐑**\n{str(e)}", ephemeral=True)
     
     async def purchase_box(self, interaction: discord.Interaction, box_type: str):
         config = BOX_CONFIG[box_type]
@@ -112,52 +162,36 @@ class PremiumBoxView(discord.ui.View):
             
             if balance < config['cost']:
                 embed = discord.Embed(
-                    title="Insufficient Balance",
-                    description=f"You need **{config['cost']} BST** but only have **{balance:.2f} BST**",
-                    color=0xED4245
+                    title="𝐈𝐍𝐒𝐔𝐅𝐅𝐈𝐂𝐈𝐄𝐍𝐓 𝐁𝐀𝐋𝐀𝐍𝐂𝐄",
+                    description=f"**𝐍𝐞𝐞𝐝:** {config['cost']} 𝐁𝐒𝐓\n**𝐇𝐚𝐯𝐞:** {balance:.2f} 𝐁𝐒𝐓",
+                    color=0x2B2D31
                 )
                 await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
             
-            # FIXED: Remove BST from user and RETURN TO POOL
             success = await interaction.client.db.buy_box_with_bst(interaction.user.id, config['cost'])
             
             if not success:
                 embed = discord.Embed(
-                    description="Purchase failed. Please try again.",
-                    color=0xED4245
+                    description="**𝐏𝐔𝐑𝐂𝐇𝐀𝐒𝐄 𝐅𝐀𝐈𝐋𝐄𝐃**\n𝐓𝐫𝐲 𝐚𝐠𝐚𝐢𝐧",
+                    color=0x2B2D31
                 )
                 await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
             
-            # Add box
             box_id = await interaction.client.db.add_box(interaction.user.id, box_type)
             new_balance = await interaction.client.db.get_balance(interaction.user.id)
             
             embed = discord.Embed(
-                title="Purchase Successful",
-                description=f"You purchased **{config['name']}**",
-                color=config['color']
+                title="𝐏𝐔𝐑𝐂𝐇𝐀𝐒𝐄 𝐒𝐔𝐂𝐂𝐄𝐒𝐒",
+                description=f"**{config['name']}**\n**𝐂𝐨𝐬𝐭:** {config['cost']} 𝐁𝐒𝐓\n**𝐍𝐞𝐰 𝐁𝐚𝐥𝐚𝐧𝐜𝐞:** {new_balance:.2f} 𝐁𝐒𝐓",
+                color=0x2B2D31
             )
-            
-            embed.add_field(
-                name="Cost",
-                value=f"{config['cost']} BST",
-                inline=True
-            )
-            
-            embed.add_field(
-                name="New Balance",
-                value=f"{new_balance:.2f} BST",
-                inline=True
-            )
-            
-            embed.set_footer(text=f"Box ID: {box_id[:8]}... | Click 'Open Box' to use it")
             
             await interaction.response.send_message(embed=embed, ephemeral=True)
             
         except Exception as e:
-            await interaction.response.send_message(f"Error: {str(e)}", ephemeral=True)
+            await interaction.response.send_message(f"**𝐄𝐑𝐑𝐎𝐑**\n{str(e)}", ephemeral=True)
 
 class BoxSelectionView(discord.ui.View):
     def __init__(self, boxes):
@@ -170,12 +204,12 @@ class BoxSelectionView(discord.ui.View):
                 discord.SelectOption(
                     label=f"{config['name']}",
                     value=str(box['box_id']),
-                    description=f"Cost: {config['cost']} BST | ID: {str(box['box_id'])[:16]}..."
+                    description=f"{config['cost']} 𝐁𝐒𝐓"
                 )
             )
         
         select = discord.ui.Select(
-            placeholder="Choose a box to open...",
+            placeholder="𝐂𝐡𝐨𝐨𝐬𝐞 𝐚 𝐛𝐨𝐱...",
             options=options
         )
         select.callback = self.select_callback
@@ -188,65 +222,47 @@ class BoxSelectionView(discord.ui.View):
         box = next((b for b in boxes if str(b['box_id']) == box_id), None)
         
         if not box:
-            await interaction.response.send_message("Box not found!", ephemeral=True)
+            await interaction.response.send_message("**𝐁𝐎𝐗 𝐍𝐎𝐓 𝐅𝐎𝐔𝐍𝐃**", ephemeral=True)
             return
         
         config = BOX_CONFIG[box['box_type']]
         
-        # Opening animation
         embed = discord.Embed(
-            title="Opening Box",
-            description="Rolling for your reward...",
-            color=0xFEE75C
+            title="𝐎𝐏𝐄𝐍𝐈𝐍𝐆 𝐁𝐎𝐗",
+            description="𝐑𝐨𝐥𝐥𝐢𝐧𝐠 𝐟𝐨𝐫 𝐫𝐞𝐰𝐚𝐫𝐝...",
+            color=0x2B2D31
         )
         await interaction.response.edit_message(embed=embed, view=None)
         
-        # Suspense delay
         import asyncio
         await asyncio.sleep(2)
         
-        # Roll with RIGGED odds
+        # RIGGED REWARDS
         items, weights = zip(*config['actual_drops'])
         item_won = random.choices(items, weights=weights, k=1)[0]
         
-        # Open box and add item
         success = await interaction.client.db.open_box(box_id, interaction.user.id, item_won)
         
         if not success:
             embed = discord.Embed(
-                description="Failed to open box. Please try again.",
-                color=0xED4245
+                description="**𝐅𝐀𝐈𝐋𝐄𝐃 𝐓𝐎 𝐎𝐏𝐄𝐍**\n𝐓𝐫𝐲 𝐚𝐠𝐚𝐢𝐧",
+                color=0x2B2D31
             )
             await interaction.edit_original_response(embed=embed)
             return
         
-        # Find displayed odds
-        display_odds = "Unknown"
+        # Find display odds
+        display_odds = "?"
         for item, odds in config['display_drops']:
             if item == item_won:
                 display_odds = odds
                 break
         
-        # Result embed
         embed = discord.Embed(
-            title="🎉 Congratulations!",
-            description=f"You won **{item_won}**",
-            color=0x57F287
+            title="𝐑𝐄𝐖𝐀𝐑𝐃",
+            description=f"**{item_won}**\n**𝐃𝐫𝐨𝐩 𝐑𝐚𝐭𝐞:** {display_odds}\n**𝐅𝐫𝐨𝐦:** {config['name']}",
+            color=0x2B2D31
         )
-        
-        embed.add_field(
-            name="From",
-            value=config['name'],
-            inline=True
-        )
-        
-        embed.add_field(
-            name="Drop Rate",
-            value=display_odds,
-            inline=True
-        )
-        
-        embed.set_footer(text="Item added to inventory | Use /inventory to view")
         
         await interaction.edit_original_response(embed=embed)
 
@@ -258,32 +274,32 @@ class Boxes(commands.Cog):
     async def on_ready(self):
         self.bot.add_view(PremiumBoxView())
 
-    @app_commands.command(name="boxpanel", description="Setup the mystery box shop panel")
+    @app_commands.command(name="boxpanel", description="Setup box shop panel")
     @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
     async def boxpanel(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permission required.", ephemeral=True)
+            await interaction.response.send_message("**𝐀𝐃𝐌𝐈𝐍 𝐎𝐍𝐋𝐘**", ephemeral=True)
             return
         
         embed = discord.Embed(
-            title="🎁 Mystery Box Shop",
-            description="Purchase mystery boxes with BST and win exclusive items!",
-            color=0x5865F2
+            title="𝐁𝐎𝐗 𝐒𝐇𝐎𝐏",
+            description="𝐏𝐮𝐫𝐜𝐡𝐚𝐬𝐞 𝐛𝐨𝐱𝐞𝐬 𝐰𝐢𝐭𝐡 𝐁𝐒𝐓",
+            color=0x2B2D31
         )
         
         for box_type, config in BOX_CONFIG.items():
-            drops_text = "\n".join([f"• {item} — `{odds}`" for item, odds in config['display_drops']])
+            drops_text = ""
+            for item, odds in config['display_drops']:
+                drops_text += f"**{item}** {odds}\n"
             
             embed.add_field(
-                name=f"{config['name']} — {config['cost']} BST",
-                value=drops_text,
-                inline=False
+                name=f"**{config['name']}**",
+                value=f"**𝐂𝐨𝐬𝐭:** {config['cost']} 𝐁𝐒𝐓\n{drops_text}",
+                inline=True
             )
         
-        embed.set_footer(text="Use the buttons below to purchase and open boxes")
-        
         await interaction.channel.send(embed=embed, view=PremiumBoxView())
-        await interaction.response.send_message("✅ Box panel created successfully!", ephemeral=True)
+        await interaction.response.send_message("**𝐏𝐀𝐍𝐄𝐋 𝐂𝐑𝐄𝐀𝐓𝐄𝐃**", ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(Boxes(bot))
