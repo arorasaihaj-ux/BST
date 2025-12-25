@@ -7,7 +7,7 @@ class Inventory(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name="inventory", description="View your inventory")
+    @app_commands.command(name="inventory", description="View inventory")
     @app_commands.guilds(discord.Object(id=int(os.getenv('GUILD_ID'))))
     async def inventory(self, interaction: discord.Interaction, user: discord.Member = None):
         target = user or interaction.user
@@ -17,64 +17,64 @@ class Inventory(commands.Cog):
             inventory = await self.bot.db.get_inventory(target.id)
             
             embed = discord.Embed(
-                title=f"{target.display_name}'s Inventory",
-                color=0x5865F2
+                title="𝐈𝐍𝐕𝐄𝐍𝐓𝐎𝐑𝐘",
+                description=f"**{target.display_name}**",
+                color=0x2B2D31
             )
             
-            # BST Balance
             embed.add_field(
-                name="BST Balance",
-                value=f"```{balance:.2f} BST```",
+                name="**𝐁𝐒𝐓 𝐁𝐚𝐥𝐚𝐧𝐜𝐞**",
+                value=f"{balance:.2f} 𝐁𝐒𝐓",
                 inline=False
             )
             
-            # Unopened Boxes
             if inventory['boxes']:
-                box_list = []
+                box_list = ""
                 for box in inventory['boxes']:
-                    box_name = "Base Box" if box['box_type'] == 'base' else "Gold Box"
-                    box_list.append(f"• {box_name} x{box['count']}")
+                    box_name = {
+                        'box_1': '𝟏 𝐁𝐒𝐓 𝐁𝐎𝐗',
+                        'box_2': '𝟐.𝟓 𝐁𝐒𝐓 𝐁𝐎𝐗',
+                        'box_3': '𝟓 𝐁𝐒𝐓 𝐁𝐎𝐗',
+                        'box_4': '𝟏𝟎 𝐁𝐒𝐓 𝐁𝐎𝐗'
+                    }.get(box['box_type'], box['box_type'])
+                    box_list += f"{box_name} x{box['count']}\n"
                 
                 embed.add_field(
-                    name="Unopened Boxes",
-                    value="\n".join(box_list),
+                    name="**𝐁𝐨𝐱𝐞𝐬**",
+                    value=box_list,
                     inline=False
                 )
             else:
                 embed.add_field(
-                    name="Unopened Boxes",
-                    value="*No boxes available*",
+                    name="**𝐁𝐨𝐱𝐞𝐬**",
+                    value="𝐍𝐨 𝐛𝐨𝐱𝐞𝐬",
                     inline=False
                 )
             
-            # Items Won
             if inventory['items']:
-                items_list = []
+                items_list = ""
                 for item in inventory['items'][:20]:
-                    items_list.append(f"• {item['item_name']} x{item['quantity']}")
+                    items_list += f"{item['item_name']} x{item['quantity']}\n"
                 
                 if len(inventory['items']) > 20:
-                    items_list.append(f"\n*...and {len(inventory['items']) - 20} more items*")
+                    items_list += f"\n...{len(inventory['items']) - 20} 𝐦𝐨𝐫𝐞"
                 
                 embed.add_field(
-                    name="Items Won from Boxes",
-                    value="\n".join(items_list),
+                    name="**𝐈𝐭𝐞𝐦𝐬**",
+                    value=items_list,
                     inline=False
                 )
             else:
                 embed.add_field(
-                    name="Items Won from Boxes",
-                    value="*No items yet*\n\nOpen boxes to win items!",
+                    name="**𝐈𝐭𝐞𝐦𝐬**",
+                    value="𝐍𝐨 𝐢𝐭𝐞𝐦𝐬",
                     inline=False
                 )
             
-            embed.set_footer(text="Use /boxpanel to purchase boxes")
-            
-            # PUBLIC - SEND TO CHANNEL
             await interaction.response.send_message(embed=embed)
             
         except Exception as e:
-            await interaction.response.send_message(f"Error: {str(e)}")
+            await interaction.response.send_message(f"**𝐄𝐑𝐑𝐎𝐑**\n{e}")
 
 async def setup(bot):
     await bot.add_cog(Inventory(bot))
