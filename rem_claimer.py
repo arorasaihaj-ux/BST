@@ -2,120 +2,138 @@ import os
 import sys
 import asyncio
 import random
+import time
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import discord
 
-# ─── Environment Variables ────────────────────────────────────────────
+# ─── Environment ──────────────────────────────────────────────────────
 TOKENS = [t.strip() for t in os.getenv("TOKENS", "").split(",") if t.strip()]
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 MUDAE_BOT_ID = 432610292342587392
 CLAIM_EMOJIS = ["💖", "💗", "💘", "❤️", "💓", "💕", "♥️"]
-TARGET_CHAR = "rem"          # case‑insensitive
+TARGET_CHAR = "rem"
 
-# ─── HTTP Server (for Render health checks) ──────────────────────────
+# ─── HTTP Server (Render health) ─────────────────────────────────────
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"OK")
-
-    def log_message(self, format, *args):
-        pass   # keep logs clean
+    def log_message(self, *args):
+        pass
 
 def run_webserver():
     port = int(os.environ.get("PORT", 8080))
     httpd = HTTPServer(("0.0.0.0", port), HealthHandler)
     httpd.serve_forever()
 
-# ─── Discord Client per Account ──────────────────────────────────────
-async def run_account(token: str):
-    client = discord.Client()
-    processed = set()
-    attempting = False
+# ─── Per‑account client ──────────────────────────────────────────────
+class ClaimClient(discord.Client):
+    def __init__(self, token):
+        super().__init__()
+        self.token = token
+        self.processed = set()
+        self.max_processed = 1000          # memory cap
+        self.attempting = False
+        self.rate_limited_until = 0
 
-    @client.event
-    async def on_ready():
-        print(f"✅ {client.user.name} is online and watching.")
+    async def on_ready(self):
+        print(f"✅ {self.user.name} online – watching channel {CHANNEL_ID} only")
 
-    @client.event
-    async def on_message(message):
-        nonlocal attempting
-
-        if message.author.id != MUDAE_BOT_ID or message.channel.id != CHANNEL_ID:
+    async def on_message(self, msg):
+        # Ignore everything outside our single channel
+        if msg.channel.id != CHANNEL_ID:
             return
-        if not message.embeds:
+        if msg.author.id != MUDAE_BOT_ID:
+            return
+        if not msg.embeds:
             return
 
-        embed = message.embeds[0]
+        embed = msg.embeds[0]
         if not embed.author or embed.author.name.lower() != TARGET_CHAR:
             return
 
-        if message.id in processed or attempting:
+        # Prevent re‑processing same message
+        if msg.id in self.processed:
+            return
+        if self.attempting:
             return
 
-        claim_button = None
-        for component in message.components:
-            for btn in component.children:
+        # Find claim button
+        claim_btn = None
+        for comp in msg.components:
+            for btn in comp.children:
                 if hasattr(btn, "emoji") and btn.emoji and btn.emoji.name in CLAIM_EMOJIS:
-                    claim_button = btn
+                    claim_btn = btn
                     break
-            if claim_button:
+            if claim_btn:
                 break
-
-        if not claim_button:
+        if not claim_btn:
             return
 
-        processed.add(message.id)
-        attempting = True
-        try:
-            await attempt_claim(client, message, claim_button)
-        finally:
-            attempting = False
+        # Mark as processed (memory cap)
+        self.processed.add(msg.id)
+        if len(self.processed) > self.max_processed:
+            # Remove oldest (roughly)
+            to_remove = len(self.processed) - self.max_processed
+            for _ in range(to_remove):
+                self.processed.pop()
 
-    async def attempt_claim(client, msg, btn, used_rt=False):
-        # small stagger to avoid all accounts clicking at the exact same time
+        self.attempting = True
+        try:
+            await self._claim_sequence(msg, claim_btn)
+        finally:
+            self.attempting = False
+
+    async def _claim_sequence(self, msg, btn, used_rt=False):
+        # Random stagger 0–0.5s to reduce race
         await asyncio.sleep(random.uniform(0, 0.5))
 
-        await btn.click()
-        print(f"💖 {client.user.name} clicked claim on {TARGET_CHAR} (msg {msg.id})")
+        # Click with rate‑limit backoff
+        await self._click_with_retry(btn)
+        print(f"💖 {self.user.name} clicked claim on {TARGET_CHAR} (msg {msg.id})")
 
-        await asyncio.sleep(2)
+        await asyncio.sleep(2)  # let Mudae reply
 
-        failure_phrase = "you can't claim"
-        failure_found = False
+        # Check for "you can't claim"
+        fail_phrase = "you can't claim"
+        failure = False
         async for m in msg.channel.history(limit=5):
-            if m.author.id == MUDAE_BOT_ID and failure_phrase in m.content.lower():
-                failure_found = True
+            if m.author.id == MUDAE_BOT_ID and fail_phrase in m.content.lower():
+                failure = True
                 break
 
-        if not failure_found:
-            print(f"✅ {client.user.name} claimed successfully!")
+        if not failure:
+            print(f"✅ {self.user.name} claimed successfully!")
             return
 
         if used_rt:
-            print(f"❌ {client.user.name} still can't claim even after $rt.")
+            print(f"❌ {self.user.name} still can't claim after $rt")
             return
 
-        print(f"🔄 {client.user.name} got 'you can\'t claim' – sending $rt...")
-        await msg.channel.send("$rt")
+        # Try $rt
+        print(f"🔄 {self.user.name} sending $rt...")
+        await self._send_with_retry(msg.channel, "$rt")
         await asyncio.sleep(3)
 
-        rt_cooldown_phrase = "$rt cooldown is not over"
+        # Check if $rt is on cooldown
+        rt_cooldown = "$rt cooldown is not over"
         rt_fail = False
         async for m in msg.channel.history(limit=5):
-            if m.author.id == MUDAE_BOT_ID and rt_cooldown_phrase in m.content.lower():
+            if m.author.id == MUDAE_BOT_ID and rt_cooldown in m.content.lower():
                 rt_fail = True
                 break
 
         if rt_fail:
-            print(f"⏳ {client.user.name} $rt is on cooldown – giving up.")
+            print(f"⏳ {self.user.name} $rt cooldown – giving up")
             return
 
+        # Retry with fresh message
         try:
-            fresh_msg = await msg.channel.fetch_message(msg.id)
+            fresh = await msg.channel.fetch_message(msg.id)
             new_btn = None
-            for comp in fresh_msg.components:
+            for comp in fresh.components:
                 for b in comp.children:
                     if hasattr(b, "emoji") and b.emoji and b.emoji.name in CLAIM_EMOJIS:
                         new_btn = b
@@ -123,37 +141,66 @@ async def run_account(token: str):
                 if new_btn:
                     break
             if new_btn:
-                print(f"🔁 {client.user.name} retrying claim after $rt...")
-                await attempt_claim(client, fresh_msg, new_btn, used_rt=True)
-            else:
-                print(f"⚠️ {client.user.name} could not find claim button after $rt.")
+                print(f"🔁 {self.user.name} retrying after $rt")
+                await self._claim_sequence(fresh, new_btn, used_rt=True)
         except discord.NotFound:
-            print(f"⚠️ {client.user.name} original message was deleted.")
+            print(f"⚠️ {self.user.name} message disappeared")
 
-    await client.start(token)
+    async def _click_with_retry(self, btn, retries=3):
+        for attempt in range(retries):
+            now = time.time()
+            if now < self.rate_limited_until:
+                await asyncio.sleep(self.rate_limited_until - now + 0.5)
+            try:
+                await btn.click()
+                return
+            except discord.HTTPException as e:
+                if e.status == 429:
+                    retry_after = float(e.retry_after or 5)
+                    self.rate_limited_until = time.time() + retry_after
+                    print(f"⏳ {self.user.name} rate‑limited, waiting {retry_after:.1f}s")
+                    await asyncio.sleep(retry_after + 0.5)
+                else:
+                    raise
 
-# ─── Main entry point ──────────────────────────────────────────────────
+    async def _send_with_retry(self, channel, content, retries=3):
+        for attempt in range(retries):
+            now = time.time()
+            if now < self.rate_limited_until:
+                await asyncio.sleep(self.rate_limited_until - now + 0.5)
+            try:
+                await channel.send(content)
+                return
+            except discord.HTTPException as e:
+                if e.status == 429:
+                    retry_after = float(e.retry_after or 5)
+                    self.rate_limited_until = time.time() + retry_after
+                    await asyncio.sleep(retry_after + 0.5)
+                else:
+                    raise
+
+    async def start(self):
+        await super().start(self.token, reconnect=True)
+
+# ─── Main ─────────────────────────────────────────────────────────────
 async def main():
     if not TOKENS:
-        print("❌ No tokens found. Set TOKENS environment variable.")
+        print("❌ No TOKENS set")
         return
     if CHANNEL_ID == 0:
-        print("❌ No CHANNEL_ID set.")
+        print("❌ No CHANNEL_ID set")
         return
 
     print(f"🚀 Starting {len(TOKENS)} accounts on channel {CHANNEL_ID}")
-    tasks = [asyncio.create_task(run_account(tok)) for tok in TOKENS]
+    clients = [ClaimClient(tok) for tok in TOKENS]
+    tasks = [client.start() for client in clients]
     await asyncio.gather(*tasks)
 
 if __name__ == "__main__":
-    # Start web server in a daemon thread
     threading.Thread(target=run_webserver, daemon=True).start()
-
-    # Run the bot with automatic restart on crash
     while True:
         try:
             asyncio.run(main())
         except Exception as e:
-            print(f"⚠️ Bot crashed: {e}. Restarting in 10s...")
-            import time
+            print(f"⚠️ Crash: {e}. Restarting in 10s...")
             time.sleep(10)
