@@ -1,151 +1,159 @@
-import discord
-from discord.ext import commands
 import os
+import sys
 import asyncio
-from dotenv import load_dotenv
-from aiohttp import web
-from database import Database
+import random
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import discord
 
-load_dotenv()
+# ─── Environment Variables ────────────────────────────────────────────
+TOKENS = [t.strip() for t in os.getenv("TOKENS", "").split(",") if t.strip()]
+CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
+MUDAE_BOT_ID = 432610292342587392
+CLAIM_EMOJIS = ["💖", "💗", "💘", "❤️", "💓", "💕", "♥️"]
+TARGET_CHAR = "rem"          # case‑insensitive
 
-class CleanEconomyBot(commands.Bot):
-    def __init__(self):
-        intents = discord.Intents.default()
-        intents.message_content = True
-        intents.members = True
-        
-        super().__init__(
-            command_prefix='!',
-            intents=intents,
-            help_command=None
-        )
-        
-        self.db = None
-        self.initialized = False
-        
-        # MULTIPLE OWNER SUPPORT
-        owner_ids_str = os.getenv('OWNER_USER_IDS', '')
-        self.owner_user_ids = [int(uid.strip()) for uid in owner_ids_str.split(',') if uid.strip()]
-        
-        # Manager roles
-        manager_roles_str = os.getenv('MANAGER_ROLE_ID', '')
-        self.manager_role_ids = [int(role_id.strip()) for role_id in manager_roles_str.split(',') if role_id.strip()]
-        
-        self.guild_id = int(os.getenv('GUILD_ID'))
-        
-        print(f"🔧 Configured {len(self.owner_user_ids)} owner(s)")
-        print(f"🔧 Configured {len(self.manager_role_ids)} manager role(s)")
+# ─── HTTP Server (for Render health checks) ──────────────────────────
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
 
-    async def setup_hook(self):
-        """Load cogs"""
-        self.tree.clear_commands(guild=None)
-        print("🗑️ Cleared global commands")
-        
-        guild = discord.Object(id=self.guild_id)
-        self.tree.clear_commands(guild=guild)
-        print("🗑️ Cleared guild commands")
-        
-        cogs = [
-            'cogs.economy',
-            'cogs.boxes', 
-            'cogs.inventory',
-            'cogs.trading',
-            'cogs.admin'
-        ]
-        
-        for cog in cogs:
-            try:
-                await self.load_extension(cog)
-                print(f"✅ Loaded {cog}")
-            except Exception as e:
-                print(f"❌ Failed to load {cog}: {e}")
+    def log_message(self, format, *args):
+        pass   # keep logs clean
 
-    async def on_ready(self):
-        print(f'✅ {self.user} is online!')
-        print(f'📊 Guild ID: {self.guild_id}')
-        print(f'👤 Owner User IDs: {self.owner_user_ids}')
-        print(f'👥 Manager Role IDs: {self.manager_role_ids}')
-        
-        if not self.initialized:
-            self.db = Database()
-            await self.db.connect()
-            
-            guild = discord.Object(id=self.guild_id)
-            self.tree.copy_global_to(guild=guild)
-            await self.tree.sync(guild=guild)
-            
-            self.initialized = True
-            print("✅ Commands synced to guild")
-            
-            # Display pool status on startup
-            try:
-                pools = await self.db.get_both_pools()
-                circulation = await self.db.get_total_bst_in_circulation()
-                print(f"\n💰 ECONOMY STATUS:")
-                print(f"   Main Pool: {pools['main_pool']:.2f} BST")
-                print(f"   Weekly Pool: {pools['weekly_pool']:.2f} BST")
-                print(f"   Circulation: {circulation:.2f} BST")
-                print(f"   Total Supply: {pools['main_pool'] + circulation:.2f} BST\n")
-            except Exception as e:
-                print(f"⚠️ Could not fetch economy status: {e}")
+def run_webserver():
+    port = int(os.environ.get("PORT", 8080))
+    httpd = HTTPServer(("0.0.0.0", port), HealthHandler)
+    httpd.serve_forever()
 
-    async def on_command_error(self, ctx, error):
-        """Global error handler"""
-        if isinstance(error, commands.CommandNotFound):
+# ─── Discord Client per Account ──────────────────────────────────────
+async def run_account(token: str):
+    client = discord.Client()
+    processed = set()
+    attempting = False
+
+    @client.event
+    async def on_ready():
+        print(f"✅ {client.user.name} is online and watching.")
+
+    @client.event
+    async def on_message(message):
+        nonlocal attempting
+
+        if message.author.id != MUDAE_BOT_ID or message.channel.id != CHANNEL_ID:
             return
-        print(f"Command error: {error}")
+        if not message.embeds:
+            return
 
-    async def start_web_server(self):
-        """Health check for Render"""
-        async def health(request):
-            return web.Response(text="Bot running")
-        
-        async def status(request):
-            """Status endpoint showing bot info"""
-            if self.is_ready():
-                pools = await self.db.get_both_pools()
-                circulation = await self.db.get_total_bst_in_circulation()
-                
-                status_text = f"""
-Bot Status: Online
-Guild: {self.guild_id}
-Owners: {len(self.owner_user_ids)}
-Managers: {len(self.manager_role_ids)}
+        embed = message.embeds[0]
+        if not embed.author or embed.author.name.lower() != TARGET_CHAR:
+            return
 
-Economy:
-  Main Pool: {pools['main_pool']:.2f} BST
-  Weekly Pool: {pools['weekly_pool']:.2f} BST
-  Circulation: {circulation:.2f} BST
-  Total Supply: {pools['main_pool'] + circulation:.2f} BST
-                """
-                return web.Response(text=status_text)
+        if message.id in processed or attempting:
+            return
+
+        claim_button = None
+        for component in message.components:
+            for btn in component.children:
+                if hasattr(btn, "emoji") and btn.emoji and btn.emoji.name in CLAIM_EMOJIS:
+                    claim_button = btn
+                    break
+            if claim_button:
+                break
+
+        if not claim_button:
+            return
+
+        processed.add(message.id)
+        attempting = True
+        try:
+            await attempt_claim(client, message, claim_button)
+        finally:
+            attempting = False
+
+    async def attempt_claim(client, msg, btn, used_rt=False):
+        # small stagger to avoid all accounts clicking at the exact same time
+        await asyncio.sleep(random.uniform(0, 0.5))
+
+        await btn.click()
+        print(f"💖 {client.user.name} clicked claim on {TARGET_CHAR} (msg {msg.id})")
+
+        await asyncio.sleep(2)
+
+        failure_phrase = "you can't claim"
+        failure_found = False
+        async for m in msg.channel.history(limit=5):
+            if m.author.id == MUDAE_BOT_ID and failure_phrase in m.content.lower():
+                failure_found = True
+                break
+
+        if not failure_found:
+            print(f"✅ {client.user.name} claimed successfully!")
+            return
+
+        if used_rt:
+            print(f"❌ {client.user.name} still can't claim even after $rt.")
+            return
+
+        print(f"🔄 {client.user.name} got 'you can\'t claim' – sending $rt...")
+        await msg.channel.send("$rt")
+        await asyncio.sleep(3)
+
+        rt_cooldown_phrase = "$rt cooldown is not over"
+        rt_fail = False
+        async for m in msg.channel.history(limit=5):
+            if m.author.id == MUDAE_BOT_ID and rt_cooldown_phrase in m.content.lower():
+                rt_fail = True
+                break
+
+        if rt_fail:
+            print(f"⏳ {client.user.name} $rt is on cooldown – giving up.")
+            return
+
+        try:
+            fresh_msg = await msg.channel.fetch_message(msg.id)
+            new_btn = None
+            for comp in fresh_msg.components:
+                for b in comp.children:
+                    if hasattr(b, "emoji") and b.emoji and b.emoji.name in CLAIM_EMOJIS:
+                        new_btn = b
+                        break
+                if new_btn:
+                    break
+            if new_btn:
+                print(f"🔁 {client.user.name} retrying claim after $rt...")
+                await attempt_claim(client, fresh_msg, new_btn, used_rt=True)
             else:
-                return web.Response(text="Bot starting...", status=503)
-        
-        app = web.Application()
-        app.router.add_get('/', health)
-        app.router.add_get('/status', status)
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, '0.0.0.0', int(os.getenv('PORT', 8080)))
-        await site.start()
-        print("✅ Web server started on port", os.getenv('PORT', 8080))
+                print(f"⚠️ {client.user.name} could not find claim button after $rt.")
+        except discord.NotFound:
+            print(f"⚠️ {client.user.name} original message was deleted.")
 
+    await client.start(token)
+
+# ─── Main entry point ──────────────────────────────────────────────────
 async def main():
-    bot = CleanEconomyBot()
-    
-    # Start health check server
-    await bot.start_web_server()
-    
-    # Start bot
-    try:
-        await bot.start(os.getenv('DISCORD_TOKEN'))
-    except KeyboardInterrupt:
-        print("\n⚠️ Shutting down...")
-        await bot.close()
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        await bot.close()
+    if not TOKENS:
+        print("❌ No tokens found. Set TOKENS environment variable.")
+        return
+    if CHANNEL_ID == 0:
+        print("❌ No CHANNEL_ID set.")
+        return
+
+    print(f"🚀 Starting {len(TOKENS)} accounts on channel {CHANNEL_ID}")
+    tasks = [asyncio.create_task(run_account(tok)) for tok in TOKENS]
+    await asyncio.gather(*tasks)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Start web server in a daemon thread
+    threading.Thread(target=run_webserver, daemon=True).start()
+
+    # Run the bot with automatic restart on crash
+    while True:
+        try:
+            asyncio.run(main())
+        except Exception as e:
+            print(f"⚠️ Bot crashed: {e}. Restarting in 10s...")
+            import time
+            time.sleep(10)
